@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import banco # Importa nosso backend limpo que conecta no Supabase
+import banco # Importa nosso backend
 import time
 
 # --- CONFIGURAÇÃO VISUAL ---
@@ -38,10 +38,11 @@ def tela_login():
         tab_entrar, tab_criar = st.tabs(["🔒 Acessar Painel", "✨ Criar Nova Conta"])
         
         with tab_entrar:
-            email = st.text_input("E-mail")
-            senha = st.text_input("Senha", type="password")
+            # ADICIONEI key="..." PARA EVITAR O ERRO DE DUPLICIDADE
+            email = st.text_input("E-mail", key="login_email")
+            senha = st.text_input("Senha", type="password", key="login_pass")
             
-            if st.button("ENTRAR", type="primary"):
+            if st.button("ENTRAR", type="primary", key="btn_entrar"):
                 # 1. Admin (Backdoor via Secrets)
                 try:
                     if email == st.secrets["admin"]["email"] and senha == st.secrets["admin"]["senha"]:
@@ -60,13 +61,14 @@ def tela_login():
                     st.error("Dados incorretos ou erro de conexão.")
         
         with tab_criar:
-            st.info("☁️ Seus dados serão salvos na nuvem segura (Supabase).")
-            nome = st.text_input("Nome Completo")
-            cad_email = st.text_input("E-mail para cadastro")
-            cad_tel = st.text_input("WhatsApp")
-            cad_senha = st.text_input("Senha", type="password")
+            st.info("☁️ Seus dados serão salvos na nuvem segura.")
+            # ADICIONEI key="..." AQUI TAMBÉM
+            nome = st.text_input("Nome Completo", key="cad_nome")
+            cad_email = st.text_input("E-mail para cadastro", key="cad_email")
+            cad_tel = st.text_input("WhatsApp", key="cad_tel")
+            cad_senha = st.text_input("Crie uma Senha", type="password", key="cad_pass")
             
-            if st.button("CRIAR CONTA"):
+            if st.button("CRIAR CONTA", key="btn_criar"):
                 if len(cad_senha) < 4:
                     st.warning("Senha curta.")
                 else:
@@ -84,7 +86,6 @@ def sistema_logado():
     user = st.session_state['user']
     
     with st.sidebar:
-        # Tenta colocar imagem, se falhar nao quebra
         try: st.image("https://cdn-icons-png.flaticon.com/512/723/723955.png", width=80)
         except: pass
         
@@ -101,63 +102,4 @@ def sistema_logado():
             st.session_state['user'] = None
             st.rerun()
 
-    # --- CARREGAMENTO ---
-    df_cotacoes = banco.ler_dados_historico()
-    
-    # --- DASHBOARD ---
-    if menu == "Dashboard Geral":
-        st.title("📊 Visão de Mercado")
-        if not df_cotacoes.empty:
-            st.line_chart(df_cotacoes, x="data_hora", y="cpm", color="programa")
-        else: st.warning("Sem dados.")
-
-    # --- CARTEIRA ---
-    elif menu == "Minha Carteira":
-        st.title("💼 Carteira")
-        with st.expander("➕ Adicionar"):
-            c1, c2, c3 = st.columns(3)
-            p = c1.selectbox("Programa", ["Latam Pass", "Smiles", "Azul", "Livelo"])
-            q = c2.number_input("Qtd", 1000, step=1000)
-            v = c3.number_input("R$ Total", 0.0, step=10.0)
-            if st.button("Salvar"):
-                banco.adicionar_carteira(user['email'], p, q, v)
-                st.rerun()
-        
-        dfc = banco.ler_carteira_usuario(user['email'])
-        if not dfc.empty:
-            st.dataframe(dfc)
-            rid = st.number_input("ID Remover", step=1)
-            if st.button("Remover"):
-                banco.remover_carteira(rid)
-                st.rerun()
-        else: st.info("Vazia.")
-
-    # --- P2P ---
-    elif menu == "Mercado P2P":
-        st.title("📢 P2P Manual")
-        with st.form("p2p"):
-            c1, c2 = st.columns(2)
-            g = c1.text_input("Grupo")
-            p = c2.selectbox("Prog", ["Latam", "Smiles"])
-            t = st.radio("Tipo", ["VENDA", "COMPRA"])
-            val = st.number_input("Valor", 15.0)
-            obs = st.text_input("Obs")
-            if st.form_submit_button("Salvar"):
-                banco.adicionar_oferta_p2p(g, p, t, val, obs)
-                st.rerun()
-        dfp2p = banco.ler_p2p()
-        if not dfp2p.empty: st.dataframe(dfp2p)
-
-    # --- PROMOS ---
-    elif menu == "Promoções":
-        st.title("🔥 Radar")
-        try:
-            con = sqlite3.connect("milhas.db")
-            dfp = pd.read_sql_query("SELECT * FROM promocoes ORDER BY id DESC LIMIT 15", con)
-            con.close()
-            for _, r in dfp.iterrows(): st.markdown(f"[{r['titulo']}]({r['link']})")
-        except: pass
-
-# MAIN
-if st.session_state['user']: sistema_logado()
-else: tela_login()
+    # ---
