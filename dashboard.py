@@ -6,7 +6,7 @@ import time
 import re
 from datetime import datetime
 
-# --- 1. CONFIGURAÇÃO INICIAL ---
+# --- 1. CONFIGURAÇÃO INICIAL (Obrigatório ser a primeira linha) ---
 st.set_page_config(
     page_title="MilhasPro System",
     page_icon="🚀",
@@ -37,6 +37,7 @@ def conectar_local(): return sqlite3.connect(NOME_BANCO_LOCAL)
 def iniciar_banco():
     con = conectar_local()
     cur = con.cursor()
+    # Criação de tabelas
     cur.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
     cur.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
     cur.execute('CREATE TABLE IF NOT EXISTS carteira (id INTEGER PRIMARY KEY AUTOINCREMENT, usuario_email TEXT, data_compra TEXT, programa TEXT, quantidade INTEGER, custo_total REAL, cpm_medio REAL)')
@@ -51,13 +52,14 @@ def validar_senha_forte(senha):
     if not re.search(r"[a-z]", senha): return False, "Precisa de letra minúscula."
     if not re.search(r"[A-Z]", senha): return False, "Precisa de letra maiúscula."
     if not re.search(r"[0-9]", senha): return False, "Precisa de número."
-    if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", senha): return False, "Precisa de caractere especial (@, #, $, etc)."
+    if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", senha): return False, "Precisa de caractere especial (@#$)."
     return True, ""
 
-# --- 4. FUNÇÕES ---
+# --- 4. FUNÇÕES DE USUÁRIO & ADMIN ---
 def registrar_usuario(nome, email, senha, telefone):
     valida, msg = validar_senha_forte(senha)
     if not valida: return False, msg
+
     sb = get_supabase()
     if sb:
         try:
@@ -67,6 +69,7 @@ def registrar_usuario(nome, email, senha, telefone):
             sb.table("usuarios").insert(dados).execute()
             return True, "Conta criada! Faça login."
         except Exception as e: return False, f"Erro: {e}"
+    
     try:
         con = conectar_local()
         con.execute("INSERT INTO usuarios (email, nome, senha_hash) VALUES (?, ?, ?)", (email, nome, criar_hash(senha)))
@@ -84,6 +87,7 @@ def autenticar_usuario(email, senha):
                 u = res.data[0]
                 return {"nome": u['nome'], "plano": u.get('plano', 'Free'), "email": email}
         except: pass
+    
     con = conectar_local()
     res = con.execute("SELECT nome FROM usuarios WHERE email = ? AND senha_hash = ?", (email, h)).fetchone()
     con.close()
@@ -113,13 +117,13 @@ def admin_resetar_senha(id_user, nova_senha_texto):
     sb = get_supabase()
     if sb:
         try:
-            novo_hash = criar_hash(nova_senha_texto)
-            sb.table("usuarios").update({"senha_hash": novo_hash}).eq("id", id_user).execute()
+            nh = criar_hash(nova_senha_texto)
+            sb.table("usuarios").update({"senha_hash": nh}).eq("id", id_user).execute()
             return True
         except: return False
     return False
 
-# --- DADOS ---
+# --- 5. FUNÇÕES DE DADOS ---
 def ler_dados_historico():
     con = conectar_local()
     try:
@@ -148,15 +152,14 @@ def remover_carteira(id_item):
 
 def adicionar_p2p(g, p, t, v, o):
     con = conectar_local()
+    # Correção de sintaxe SQL
     sql = "INSERT INTO mercado_p2p (data_hora, grupo_nome, programa, tipo, valor, observacao) VALUES (?, ?, ?, ?, ?, ?)"
     con.execute(sql, (datetime.now().strftime("%Y-%m-%d %H:%M"), g, p, t, v, o))
     con.commit(); con.close()
 
-# Nova Função: Busca o último valor P2P para comparar
 def pegar_ultimo_p2p(programa):
     con = conectar_local()
     try:
-        # Busca a última venda registrada para este programa
         cursor = con.execute("SELECT valor FROM mercado_p2p WHERE programa LIKE ? AND tipo = 'VENDA' ORDER BY id DESC LIMIT 1", (f"%{programa}%",))
         res = cursor.fetchone()
         con.close()
@@ -204,7 +207,7 @@ def tela_login():
                 else: st.error("Acesso negado.")
         
         with tab2:
-            st.info("Senha forte obrigatória.")
+            st.info("Senha forte obrigatória (Maiusc, Minusc, Num, Especial).")
             nome = st.text_input("Nome", key="cad_nome")
             mail = st.text_input("E-mail", key="cad_mail")
             whats = st.text_input("WhatsApp", key="cad_whats")
@@ -228,4 +231,133 @@ def sistema_logado():
         try: st.image("https://cdn-icons-png.flaticon.com/512/1356/1356479.png", width=80)
         except: pass
         st.write(f"Olá, **{user['nome']}**")
-        if plano == "Admin": st
+        if plano == "Admin": st.success("👑 ADMIN")
+        elif plano == "Pro": st.success("⭐ PRO")
+        else: st.info("🔹 FREE")
+        st.divider()
+        menu = st.radio("Menu", opcoes)
+        st.divider()
+        if st.button("Sair"): st.session_state['user'] = None; st.rerun()
+
+    df_cotacoes = ler_dados_historico()
+
+    # --- DASHBOARD ---
+    if menu == "Dashboard (Mercado)":
+        st.header("📊 Visão de Mercado")
+        if not df_cotacoes.empty:
+            cols = st.columns(3)
+            for i, p in enumerate(["Latam", "Smiles", "Azul"]):
+                d = df_cotacoes[df_cotacoes['programa'].str.contains(p, case=False, na=False)]
+                
+                # Previne erro de variável
+                val_hot = 0.0
+                if not d.empty:
+                    val_hot = d.iloc[-1]['cpm']
+                
+                valor_p2p = pegar_ultimo_p2p(p)
+                
+                with cols[i]:
+                    st.markdown(f"### {p}")
+                    if val_hot > 0:
+                        st.metric("Hotmilhas", f"R$ {val_hot:.2f}")
+                    else:
+                        st.metric("Hotmilhas", "--")
+                    
+                    if valor_p2p > 0:
+                        # Cálculo seguro do delta
+                        delta = 0.0
+                        if val_hot > 0: delta = valor_p2p - val_hot
+                        st.metric("Grupos P2P", f"R$ {valor_p2p:.2f}", delta=f"{delta:.2f} vs Robô")
+                    else:
+                        st.caption("Sem dados P2P")
+                        
+                    if not d.empty: st.line_chart(d, x="data_hora", y="cpm")
+        else: st.warning("Aguardando robô.")
+
+    # --- CARTEIRA ---
+    elif menu == "Minha Carteira":
+        st.header("💼 Carteira")
+        if plano == "Free": mostrar_paywall()
+        else:
+            with st.expander("➕ Adicionar"):
+                c1, c2, c3 = st.columns(3)
+                p = c1.selectbox("Programa", ["Latam Pass", "Smiles", "Azul", "Livelo"])
+                q = c2.number_input("Qtd", 1000, step=1000)
+                v = c3.number_input("R$ Total", 0.0, step=10.0)
+                if st.button("Salvar"): adicionar_carteira(user['email'], p, q, v); st.rerun()
+            dfc = ler_carteira_usuario(user['email'])
+            if not dfc.empty:
+                st.dataframe(dfc)
+                rid = st.number_input("ID Remover", step=1)
+                if st.button("Remover"): remover_carteira(rid); st.rerun()
+            else: st.info("Vazia.")
+
+    # --- P2P (BLINDADO) ---
+    elif menu == "Mercado P2P":
+        st.header("📢 Radar P2P")
+        
+        # Admin vê form, outros veem tabela ou bloqueio
+        if plano == "Admin":
+            with st.form("p2p"):
+                st.markdown("### 👑 Inserir Oferta")
+                c1, c2 = st.columns(2)
+                g = c1.text_input("Grupo")
+                p = c2.selectbox("Prog", ["Latam", "Smiles", "Azul"])
+                t = st.radio("Tipo", ["VENDA", "COMPRA"])
+                val = st.number_input("Valor", 15.0)
+                obs = st.text_input("Obs")
+                if st.form_submit_button("Publicar"):
+                    adicionar_p2p(g, p, t, val, obs); st.success("Salvo!"); time.sleep(0.5); st.rerun()
+        else:
+            if plano == "Free":
+                mostrar_paywall()
+                st.stop() # Para execução aqui se for free
+            else:
+                st.info("ℹ️ Dados verificados pela administração.")
+
+        # Tabela Visível para Admin e Pro
+        try:
+            con = conectar_local()
+            dfp = pd.read_sql_query("SELECT * FROM mercado_p2p ORDER BY id DESC", con)
+            con.close()
+            if not dfp.empty: st.dataframe(dfp)
+        except: pass
+
+    # --- PROMOÇÕES ---
+    elif menu == "Promoções":
+        st.header("🔥 Radar")
+        if plano == "Free": mostrar_paywall()
+        else:
+            try:
+                con = conectar_local()
+                dfp = pd.read_sql_query("SELECT * FROM promocoes ORDER BY id DESC LIMIT 15", con)
+                con.close()
+                for _, r in dfp.iterrows(): st.markdown(f"[{r['titulo']}]({r['link']})")
+            except: st.write("Nada ainda.")
+
+    # --- ADMIN CRM ---
+    elif menu == "👑 Gestão de Usuários":
+        st.header("Admin CRM")
+        df_users = admin_listar_todos()
+        if not df_users.empty:
+            sel = st.selectbox("Editar", df_users['email'].tolist())
+            u_dados = df_users[df_users['email'] == sel].iloc[0]
+            st.divider()
+            c1, c2 = st.columns(2)
+            with c1:
+                with st.form("edit"):
+                    n = st.text_input("Nome", u_dados['nome'])
+                    p = st.selectbox("Plano", ["Free", "Pro", "Admin"], index=["Free", "Pro", "Admin"].index(u_dados.get('plano', 'Free')))
+                    s = st.selectbox("Status", ["Ativo", "Bloqueado"], index=0)
+                    if st.form_submit_button("Salvar"):
+                        if admin_atualizar_dados(int(u_dados['id']), n, u_dados['email'], u_dados['telefone'], p, s):
+                            st.success("OK"); time.sleep(1); st.rerun()
+            with c2:
+                npw = st.text_input("Nova Senha")
+                if st.button("Resetar Senha") and len(npw)>3:
+                    admin_resetar_senha(int(u_dados['id']), npw); st.success("Senha alterada")
+            st.dataframe(df_users)
+
+# MAIN
+if st.session_state['user']: sistema_logado()
+else: tela_login()
