@@ -4,13 +4,15 @@ on:
   schedule:
     # Roda todo dia às 10:00 UTC (07:00 Brasil)
     - cron: '0 10 * * *'
-  workflow_dispatch: # Permite rodar manualmente clicando num botão
+  workflow_dispatch: # Botão para rodar manual
 
 jobs:
   rodar-robo:
     runs-on: ubuntu-latest
+    
+    # Permissão para salvar o arquivo .db no repositório
     permissions:
-      contents: write # Permissão para salvar o banco de dados
+      contents: write
 
     steps:
       - name: Baixar código
@@ -21,23 +23,23 @@ jobs:
         with:
           python-version: '3.9'
 
-      - name: Instalar Dependências
+      - name: Instalar Bibliotecas
         run: |
           pip install -r requirements.txt
           playwright install chromium
-          playwright install-deps
+          playwright install-deps # <--- ESSA É A LINHA QUE FALTAVA!
 
-      - name: Rodar Cotador
+      - name: Rodar o Robô
         env:
-          # AQUI ENTRA SEU SEGREDO (TOKEN) DEPOIS
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python cotador.py
 
-      - name: Salvar Banco de Dados (Commit)
+      - name: Salvar Banco de Dados (Git Push)
         run: |
           git config --global user.name 'Robo Milhas'
           git config --global user.email 'robo@milhas.com'
           git add milhas.db
-          git commit -m "Atualizando cotação diária" || echo "Nada mudou"
+          # Só faz commit se tiver mudança
+          git commit -m "Atualizando banco de dados" || echo "Nada mudou no banco"
           git push
