@@ -36,7 +36,6 @@ def conectar_local(): return sqlite3.connect(NOME_BANCO_LOCAL)
 def iniciar_banco():
     con = conectar_local()
     cur = con.cursor()
-    # Cria tabelas se não existirem
     cur.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
     cur.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
     cur.execute('CREATE TABLE IF NOT EXISTS carteira (id INTEGER PRIMARY KEY AUTOINCREMENT, usuario_email TEXT, data_compra TEXT, programa TEXT, quantidade INTEGER, custo_total REAL, cpm_medio REAL)')
@@ -46,48 +45,49 @@ def iniciar_banco():
 
 def criar_hash(senha): return hashlib.sha256(senha.encode()).hexdigest()
 
-# --- 4. FUNÇÕES DE USUÁRIO (NUVEM) ---
+# --- 4. FUNÇÕES DE USUÁRIO & ADMIN ---
 def registrar_usuario(nome, email, senha, telefone):
     sb = get_supabase()
     if sb:
         try:
             res = sb.table("usuarios").select("*").eq("email", email).execute()
             if len(res.data) > 0: return False, "E-mail já existe."
-            
-            # TODO MUNDO COMEÇA COMO FREE
             dados = {"email": email, "nome": nome, "senha_hash": criar_hash(senha), "telefone": telefone, "plano": "Free", "status": "Ativo"}
             sb.table("usuarios").insert(dados).execute()
             return True, "Conta criada! Faça login."
         except Exception as e: return False, f"Erro: {e}"
-    
-    # Fallback Local
-    try:
-        con = conectar_local()
-        con.execute("INSERT INTO usuarios (email, nome, senha_hash) VALUES (?, ?, ?)", (email, nome, criar_hash(senha)))
-        con.commit(); con.close()
-        return True, "Conta criada (Local)"
-    except: return False, "Erro local."
+    return False, "Erro conexão nuvem."
 
 def autenticar_usuario(email, senha):
     h = criar_hash(senha)
     sb = get_supabase()
-    
-    # Tenta Nuvem
     if sb:
         try:
             res = sb.table("usuarios").select("*").eq("email", email).eq("senha_hash", h).execute()
             if len(res.data) > 0:
                 u = res.data[0]
-                # Retorna dados do usuário + O PLANO DELE
                 return {"nome": u['nome'], "plano": u.get('plano', 'Free'), "email": email}
         except: pass
-        
-    # Tenta Local
-    con = conectar_local()
-    res = con.execute("SELECT nome FROM usuarios WHERE email = ? AND senha_hash = ?", (email, h)).fetchone()
-    con.close()
-    if res: return {"nome": res[0], "plano": "Local", "email": email}
     return None
+
+# --- NOVAS FUNÇÕES DE ADMIN ---
+def admin_listar_usuarios():
+    sb = get_supabase()
+    if sb:
+        try:
+            res = sb.table("usuarios").select("id, created_at, nome, email, telefone, plano, status").execute()
+            return pd.DataFrame(res.data)
+        except: pass
+    return pd.DataFrame()
+
+def admin_atualizar_plano(email_alvo, novo_plano):
+    sb = get_supabase()
+    if sb:
+        try:
+            sb.table("usuarios").update({"plano": novo_plano}).eq("email", email_alvo).execute()
+            return True
+        except: return False
+    return False
 
 # --- 5. FUNÇÕES DE DADOS ---
 def ler_dados_historico():
@@ -130,22 +130,9 @@ def mostrar_paywall():
     st.markdown("---")
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
-        st.error("🔒 FUNCIONALIDADE BLOQUEADA")
-        st.markdown("""
-        <div style='text-align: center; background-color: #f0f2f6; padding: 30px; border-radius: 10px;'>
-            <h3>Recurso Exclusivo para Assinantes PRO ⭐</h3>
-            <p>Você está no plano <b>FREE</b>. Faça o upgrade para liberar:</p>
-            <ul style='text-align: left;'>
-                <li>✅ Gestão de Carteira e Lucro</li>
-                <li>✅ Monitoramento de Mercado P2P (Telegram)</li>
-                <li>✅ Radar de Promoções em Tempo Real</li>
-            </ul>
-            <br>
-            <button style='background-color: #4CAF50; color: white; padding: 10px 24px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px;'>
-                QUERO SER PRO AGORA 🚀
-            </button>
-        </div>
-        """, unsafe_allow_html=True)
+        st.error("🔒 BLOQUEADO")
+        st.info("Recurso exclusivo para assinantes PRO.")
+        st.markdown("**Contate o admin para liberar seu acesso.**")
     st.markdown("---")
 
 # --- SESSÃO ---
@@ -164,7 +151,7 @@ def tela_login():
             email = st.text_input("E-mail", key="log_email")
             senha = st.text_input("Senha", type="password", key="log_pass")
             if st.button("Acessar", type="primary", key="btn_log"):
-                # Admin
+                # Admin Secrets
                 try:
                     if email == st.secrets["admin"]["email"] and senha == st.secrets["admin"]["senha"]:
                         st.session_state['user'] = {"nome": st.secrets["admin"]["nome"], "plano": "Admin", "email": email}
@@ -179,7 +166,7 @@ def tela_login():
                 else: st.error("Dados incorretos.")
         
         with tab2:
-            st.info("Cadastre-se para acessar o Plano Free.")
+            st.info("Cadastre-se Grátis.")
             nome = st.text_input("Nome", key="cad_nome")
             mail = st.text_input("E-mail", key="cad_mail")
             whats = st.text_input("WhatsApp", key="cad_whats")
@@ -194,29 +181,33 @@ def tela_login():
 # ==============================================================================
 def sistema_logado():
     user = st.session_state['user']
-    plano = user['plano'] # Pega o plano (Free, Pro ou Admin)
+    plano = user['plano']
     
+    # Lista de menus baseada no plano
+    opcoes_menu = ["Dashboard (Mercado)", "Minha Carteira", "Mercado P2P", "Promoções"]
+    
+    # Se for ADMIN, adiciona opção extra
+    if plano == "Admin":
+        opcoes_menu.append("👑 Área Administrativa")
+
     with st.sidebar:
         st.title("✈️ Painel")
         st.write(f"Olá, **{user['nome']}**")
         
-        # Badge
-        if plano == "Admin": st.success("👑 ADMIN")
-        elif plano == "Pro": st.success("⭐ PRO")
-        else: 
-            st.info("🔹 FREE")
-            st.caption("Acesso Limitado")
+        if plano == "Admin": st.success("👑 ADMIN MASTER")
+        elif plano == "Pro": st.success("⭐ ASSINANTE PRO")
+        else: st.info("🔹 CONTA FREE")
         
         st.divider()
-        menu = st.radio("Menu", ["Dashboard (Mercado)", "Minha Carteira", "Mercado P2P", "Promoções"])
+        menu = st.radio("Navegação", opcoes_menu)
         st.divider()
         if st.button("Sair"): st.session_state['user'] = None; st.rerun()
 
     df_cotacoes = ler_dados_historico()
 
-    # --- 1. DASHBOARD (LIBERADO PARA TODOS) ---
+    # --- 1. DASHBOARD ---
     if menu == "Dashboard (Mercado)":
-        st.header("📊 Cotações Hotmilhas (Acesso Liberado)")
+        st.header("📊 Cotações de Hoje")
         if not df_cotacoes.empty:
             cols = st.columns(3)
             for i, p in enumerate(["Latam", "Smiles", "Azul"]):
@@ -227,44 +218,41 @@ def sistema_logado():
                         st.metric(p, f"R$ {val:.2f}")
                         st.line_chart(d, x="data_hora", y="cpm")
                     else: st.metric(p, "--")
-        else: st.warning("Aguardando robô.")
+        else: st.warning("Aguardando atualização do robô.")
 
-    # --- 2. CARTEIRA (BLOQUEADO FREE) ---
+    # --- 2. CARTEIRA ---
     elif menu == "Minha Carteira":
         st.header("💼 Gestão de Carteira")
-        if plano == "Free":
-            mostrar_paywall() # <--- BLOQUEIO AQUI
+        if plano == "Free": mostrar_paywall()
         else:
-            # CONTEÚDO EXCLUSIVO PRO
             with st.expander("➕ Adicionar"):
                 c1, c2, c3 = st.columns(3)
-                p = c1.selectbox("Programa", ["Latam", "Smiles", "Azul", "Livelo"])
+                p = c1.selectbox("Prog", ["Latam", "Smiles", "Azul", "Livelo"])
                 q = c2.number_input("Qtd", 1000, step=1000)
                 v = c3.number_input("R$ Total", 0.0, step=10.0)
                 if st.button("Salvar"): adicionar_carteira(user['email'], p, q, v); st.rerun()
-            
             dfc = ler_carteira_usuario(user['email'])
             if not dfc.empty:
                 st.dataframe(dfc)
                 rid = st.number_input("ID Remover", step=1)
                 if st.button("Remover"): remover_carteira(rid); st.rerun()
-            else: st.info("Vazia.")
+            else: st.info("Carteira Vazia.")
 
-    # --- 3. P2P (BLOQUEADO FREE) ---
+    # --- 3. P2P ---
     elif menu == "Mercado P2P":
-        st.header("📢 Radar P2P Manual")
-        if plano == "Free":
-            mostrar_paywall() # <--- BLOQUEIO AQUI
+        st.header("📢 Radar P2P")
+        if plano == "Free": mostrar_paywall()
         else:
             with st.form("p2p"):
                 c1, c2 = st.columns(2)
                 g = c1.text_input("Grupo")
-                pr = c2.selectbox("Programa", ["Latam", "Smiles"])
+                p = c2.selectbox("Prog", ["Latam", "Smiles"])
                 t = st.radio("Tipo", ["VENDA", "COMPRA"])
                 val = st.number_input("Valor", 15.0)
                 obs = st.text_input("Obs")
-                if st.form_submit_button("Salvar"): adicionar_p2p(g, pr, t, val, obs); st.success("Salvo!"); time.sleep(0.5); st.rerun()
-            
+                if st.form_submit_button("Salvar"):
+                    adicionar_p2p(g, p, t, val, obs)
+                    st.success("Salvo!"); time.sleep(0.5); st.rerun()
             try:
                 con = conectar_local()
                 dfp = pd.read_sql_query("SELECT * FROM mercado_p2p ORDER BY id DESC", con)
@@ -272,11 +260,10 @@ def sistema_logado():
                 if not dfp.empty: st.dataframe(dfp)
             except: pass
 
-    # --- 4. PROMOÇÕES (BLOQUEADO FREE) ---
+    # --- 4. PROMOÇÕES ---
     elif menu == "Promoções":
         st.header("🔥 Radar de Promoções")
-        if plano == "Free":
-            mostrar_paywall() # <--- BLOQUEIO AQUI
+        if plano == "Free": mostrar_paywall()
         else:
             try:
                 con = conectar_local()
@@ -284,6 +271,52 @@ def sistema_logado():
                 con.close()
                 for _, r in dfp.iterrows(): st.markdown(f"[{r['titulo']}]({r['link']})")
             except: st.write("Nada ainda.")
+
+    # --- 5. ÁREA ADMIN (NOVA!) ---
+    elif menu == "👑 Área Administrativa":
+        st.header("Gestão de Usuários (CEO Mode)")
+        st.warning("⚠️ Cuidado: Alterações aqui afetam o acesso dos usuários.")
+        
+        df_users = admin_listar_usuarios()
+        
+        if not df_users.empty:
+            # Métricas
+            u_total = len(df_users)
+            u_pro = len(df_users[df_users['plano'] == 'Pro'])
+            u_free = len(df_users[df_users['plano'] == 'Free'])
+            
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Total Usuários", u_total)
+            m2.metric("Assinantes PRO", u_pro)
+            m3.metric("Usuários Free", u_free)
+            
+            st.divider()
+            
+            # Tabela de Usuários
+            st.markdown("### Lista de Clientes")
+            st.dataframe(df_users)
+            
+            st.divider()
+            
+            # Ferramenta de Upgrade
+            st.markdown("### ⚡ Alterar Plano do Cliente")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                target_email = st.selectbox("Selecione o Cliente", df_users['email'].unique())
+            with c2:
+                new_plan = st.selectbox("Novo Plano", ["Free", "Pro", "Bloqueado"])
+            with c3:
+                st.write("") # Espaço
+                st.write("") 
+                if st.button("💾 Atualizar Plano"):
+                    if admin_atualizar_plano(target_email, new_plan):
+                        st.success(f"Plano de {target_email} alterado para {new_plan}!")
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error("Erro ao atualizar.")
+        else:
+            st.info("Nenhum usuário encontrado no Supabase.")
 
 # MAIN
 if st.session_state['user']: sistema_logado()
