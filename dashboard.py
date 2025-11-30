@@ -1,3 +1,22 @@
+Com certeza\! Um design limpo e alinhado passa muito mais confiança para quem vai usar (e pagar) pelo sistema.
+
+Para fazer isso, vamos usar dois truques:
+
+1.  **CSS Personalizado:** Vamos injetar um código de estilo para forçar os botões a ficarem **Azuis** (cor da sua marca) em vez do padrão.
+2.  **Colunas de Layout:** Vamos usar "colunas invisíveis" para empurrar a logo para o centro exato da tela.
+
+Aqui está o código do `dashboard.py` **FINAL E ESTILIZADO**.
+
+### O que mudou no código abaixo:
+
+  * 🎨 **Botões:** Todos ficaram **Azul Marinho (\#0E436B)** com texto branco e mudam de cor quando passa o mouse.
+  * 🎯 **Logo Centralizada:** Tanto na tela de login quanto na barra lateral, a logo agora fica centralizada usando um sistema de colunas `[1, 2, 1]`.
+
+-----
+
+**Substitua todo o arquivo `dashboard.py` no GitHub por este:**
+
+```python
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -9,10 +28,13 @@ from datetime import datetime
 # --- 1. CONFIGURAÇÃO INICIAL ---
 st.set_page_config(
     page_title="MilhasPro System",
-    page_icon="✈️", # Ícone da aba do navegador
+    page_icon="🚀",
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# SEU LINK DA LOGO (Certifique-se que o arquivo existe no GitHub)
+LOGO_URL = "https://raw.githubusercontent.com/jonathanborato/sistema-milhas/main/logo.png"
 
 # --- 2. CONFIGURAÇÃO SUPABASE ---
 try:
@@ -86,7 +108,6 @@ def autenticar_usuario(email, senha):
                 u = res.data[0]
                 return {"nome": u['nome'], "plano": u.get('plano', 'Free'), "email": email}
         except: pass
-    
     con = conectar_local()
     res = con.execute("SELECT nome FROM usuarios WHERE email = ? AND senha_hash = ?", (email, h)).fetchone()
     con.close()
@@ -169,7 +190,32 @@ def pegar_ultimo_p2p(programa):
 # --- INICIALIZA ---
 iniciar_banco()
 
-st.markdown("""<style>.stButton>button {width: 100%;} .metric-card {background: #f0f2f6; padding: 15px; border-radius: 8px;}</style>""", unsafe_allow_html=True)
+# --- ESTILIZAÇÃO CSS (DESIGN AZUL) ---
+st.markdown("""
+<style>
+    /* Estilo do Botão Principal (Azul da Logo) */
+    div.stButton > button {
+        width: 100%;
+        background-color: #0E436B; /* Azul Marinho da Logo */
+        color: white;
+        border: none;
+        padding: 10px;
+        border-radius: 5px;
+        font-weight: bold;
+    }
+    div.stButton > button:hover {
+        background-color: #082d4a; /* Azul mais escuro no mouseover */
+        color: white;
+    }
+    /* Estilo dos Cards */
+    .metric-card {
+        background: #f0f2f6; 
+        padding: 15px; 
+        border-radius: 8px;
+        box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+    }
+</style>
+""", unsafe_allow_html=True)
 
 def mostrar_paywall():
     st.error("🔒 RECURSO PRO")
@@ -182,18 +228,24 @@ if 'user' not in st.session_state: st.session_state['user'] = None
 # TELA DE LOGIN
 # ==============================================================================
 def tela_login():
+    # Layout de 3 colunas para centralizar
     c1, c2, c3 = st.columns([1, 1.5, 1])
+    
     with c2:
-        # LOGO NOVA NO LOGIN
-        try: st.image("logo.png", width=200) # Usando arquivo local
-        except: st.header("MilhasPro") # Fallback se imagem falhar
+        # LOGO CENTRALIZADA
+        # Criamos 3 sub-colunas dentro da coluna do meio para centrar a imagem
+        l, m, r = st.columns([1, 2, 1])
+        with m:
+            st.image(LOGO_URL, use_column_width=True)
+        
+        st.markdown("<h3 style='text-align: center; color: #0E436B;'>Acesso ao Sistema</h3>", unsafe_allow_html=True)
         
         tab1, tab2 = st.tabs(["ENTRAR", "CRIAR CONTA"])
         
         with tab1:
             email = st.text_input("E-mail", key="log_email")
             senha = st.text_input("Senha", type="password", key="log_pass")
-            if st.button("Acessar", type="primary", key="btn_log"):
+            if st.button("ACESSAR SISTEMA", type="primary", key="btn_log"):
                 try:
                     if email == st.secrets["admin"]["email"] and senha == st.secrets["admin"]["senha"]:
                         st.session_state['user'] = {"nome": st.secrets["admin"]["nome"], "plano": "Admin", "email": email}
@@ -206,12 +258,12 @@ def tela_login():
                 else: st.error("Acesso negado.")
         
         with tab2:
-            st.info("Senha forte obrigatória (Maiusc, Minusc, Num, Especial).")
+            st.info("Senha forte obrigatória: Maiúscula, Minúscula, Número e Especial (@#$%).")
             nome = st.text_input("Nome", key="cad_nome")
             mail = st.text_input("E-mail", key="cad_mail")
             whats = st.text_input("WhatsApp", key="cad_whats")
             pw = st.text_input("Senha", type="password", key="cad_pw")
-            if st.button("Cadastrar", key="btn_cad"):
+            if st.button("CADASTRAR", key="btn_cad"):
                 ok, msg = registrar_usuario(nome, mail, pw, whats)
                 if ok: st.success(msg)
                 else: st.error(msg)
@@ -227,18 +279,20 @@ def sistema_logado():
     if plano == "Admin": opcoes.append("👑 Gestão de Usuários")
 
     with st.sidebar:
-        # LOGO NOVA NO MENU
-        try: st.image("logo.png", width=180) # Usando arquivo local
-        except: st.header("MilhasPro")
+        # LOGO CENTRALIZADA NO MENU
+        l, m, r = st.columns([1, 4, 1])
+        with m:
+            st.image(LOGO_URL, use_column_width=True)
+            
+        st.markdown(f"<p style='text-align: center;'>Olá, <b>{user['nome'].split()[0]}</b></p>", unsafe_allow_html=True)
         
-        st.write(f"Olá, **{user['nome']}**")
         if plano == "Admin": st.success("👑 ADMIN")
         elif plano == "Pro": st.success("⭐ PRO")
         else: st.info("🔹 FREE")
         st.divider()
         menu = st.radio("Menu", opcoes)
         st.divider()
-        if st.button("Sair"): st.session_state['user'] = None; st.rerun()
+        if st.button("SAIR"): st.session_state['user'] = None; st.rerun()
 
     df_cotacoes = ler_dados_historico()
 
@@ -249,10 +303,8 @@ def sistema_logado():
             cols = st.columns(3)
             for i, p in enumerate(["Latam", "Smiles", "Azul"]):
                 d = df_cotacoes[df_cotacoes['programa'].str.contains(p, case=False, na=False)]
-                
                 val_hot = 0.0
                 if not d.empty: val_hot = d.iloc[-1]['cpm']
-                
                 valor_p2p = pegar_ultimo_p2p(p)
                 
                 with cols[i]:
@@ -265,7 +317,6 @@ def sistema_logado():
                         if val_hot > 0: delta = valor_p2p - val_hot
                         st.metric("Grupos P2P", f"R$ {valor_p2p:.2f}", delta=f"{delta:.2f} vs Robô")
                     else: st.caption("Sem dados P2P")
-                        
                     if not d.empty: st.line_chart(d, x="data_hora", y="cpm")
         else: st.warning("Aguardando robô.")
 
@@ -279,19 +330,17 @@ def sistema_logado():
                 p = c1.selectbox("Programa", ["Latam Pass", "Smiles", "Azul", "Livelo"])
                 q = c2.number_input("Qtd", 1000, step=1000)
                 v = c3.number_input("R$ Total", 0.0, step=10.0)
-                if st.button("Salvar"): adicionar_carteira(user['email'], p, q, v); st.rerun()
+                if st.button("SALVAR"): adicionar_carteira(user['email'], p, q, v); st.rerun()
             dfc = ler_carteira_usuario(user['email'])
             if not dfc.empty:
                 st.dataframe(dfc)
                 rid = st.number_input("ID Remover", step=1)
-                if st.button("Remover"): remover_carteira(rid); st.rerun()
+                if st.button("REMOVER"): remover_carteira(rid); st.rerun()
             else: st.info("Vazia.")
 
-    # --- MERCADO P2P ---
+    # --- P2P ---
     elif menu == "Mercado P2P":
         st.header("📢 Radar P2P")
-        
-        # Só ADMIN posta ofertas
         if plano == "Admin":
             with st.form("p2p"):
                 st.markdown("### 👑 Inserir Oferta (Admin)")
@@ -301,7 +350,7 @@ def sistema_logado():
                 t = st.radio("Tipo", ["VENDA", "COMPRA"])
                 val = st.number_input("Valor", 15.0)
                 obs = st.text_input("Obs")
-                if st.form_submit_button("Publicar"):
+                if st.form_submit_button("PUBLICAR"):
                     adicionar_p2p(g, p, t, val, obs); st.success("Salvo!"); time.sleep(0.5); st.rerun()
         else:
             if plano == "Free": mostrar_paywall(); st.stop()
@@ -340,15 +389,16 @@ def sistema_logado():
                     n = st.text_input("Nome", u_dados['nome'])
                     p = st.selectbox("Plano", ["Free", "Pro", "Admin"], index=["Free", "Pro", "Admin"].index(u_dados.get('plano', 'Free')))
                     s = st.selectbox("Status", ["Ativo", "Bloqueado"], index=0)
-                    if st.form_submit_button("Salvar"):
+                    if st.form_submit_button("SALVAR"):
                         if admin_atualizar_dados(int(u_dados['id']), n, u_dados['email'], u_dados['telefone'], p, s):
                             st.success("OK"); time.sleep(1); st.rerun()
             with c2:
                 npw = st.text_input("Nova Senha")
-                if st.button("Resetar Senha") and len(npw)>3:
+                if st.button("RESETAR SENHA") and len(npw)>3:
                     admin_resetar_senha(int(u_dados['id']), npw); st.success("Senha alterada")
             st.dataframe(df_users)
 
 # MAIN
 if st.session_state['user']: sistema_logado()
 else: tela_login()
+```
