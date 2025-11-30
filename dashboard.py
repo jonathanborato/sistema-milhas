@@ -5,7 +5,7 @@ import banco
 import time
 
 # Configuração da página
-st.set_page_config(page_title="Milhas Pro System", page_icon="🔐", layout="wide")
+st.set_page_config(page_title="Milhas Pro System", page_icon="✈️", layout="wide")
 
 # Garante banco iniciado
 banco.iniciar_banco()
@@ -22,7 +22,9 @@ def tela_login():
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
-        st.title("✈️ Milhas Pro System")
+        # Logo na tela de login também fica bonito
+        st.image("https://cdn-icons-png.flaticon.com/512/723/723955.png", width=80)
+        st.title("Milhas Pro System")
         st.markdown("### O seu Centro de Inteligência de Milhas Aéreas")
         
         tab_login, tab_cadastro = st.tabs(["🔑 Entrar", "📝 Criar Conta"])
@@ -65,15 +67,24 @@ def tela_login():
 # FUNÇÃO 2: O SISTEMA COMPLETO (ÁREA LOGADA)
 # ==============================================================================
 def sistema_principal():
-    # --- BARRA LATERAL COM LOGOUT ---
+    # --- BARRA LATERAL COM LOGO, USER E MENU ---
     with st.sidebar:
+        # LOGOMARCA AQUI
+        st.image("https://cdn-icons-png.flaticon.com/512/723/723955.png", width=100)
+        
         st.write(f"👤 Olá, **{st.session_state['usuario_nome']}**")
+        
         if st.button("Sair / Logout"):
             st.session_state['logado'] = False
             st.rerun()
         st.divider()
+        
+        # Menu de Navegação na Lateral
+        menu = st.radio("Navegação", ["Minha Carteira", "Análise de Mercado", "Promoções"])
+        st.divider()
+        st.caption("Milhas Pro System v3.0")
     
-    # --- AQUI COMEÇA O SEU SISTEMA ORIGINAL (COPIADO E COLADO) ---
+    # --- TÍTULO DA PÁGINA ---
     st.title("🏦 Gestão de Patrimônio em Milhas")
 
     # --- FUNÇÕES AUXILIARES ---
@@ -95,13 +106,13 @@ def sistema_principal():
             return filtro.iloc[-1]['cpm']
         return 0.0
 
+    # Carrega dados
     df_cotacoes = carregar_cotacoes()
     df_carteira = banco.ler_carteira()
 
-    # MENU DE NAVEGAÇÃO
-    menu = st.sidebar.radio("Navegação", ["Minha Carteira", "Análise de Mercado", "Promoções"])
-
-    # ABA: CARTEIRA
+    # ==========================================================================
+    # ABA: MINHA CARTEIRA
+    # ==========================================================================
     if menu == "Minha Carteira":
         st.header("💼 Seu Estoque de Milhas")
         with st.expander("➕ Registrar Nova Compra", expanded=False):
@@ -128,6 +139,8 @@ def sistema_principal():
                 custo = row['custo_total']
                 cpm_pago = row['cpm_medio']
                 preco_mercado = pegar_preco_atual(prog, df_cotacoes)
+                
+                # Cálculos
                 valor_atual_venda = (qtd / 1000) * preco_mercado
                 lucro_prejuizo = valor_atual_venda - custo
                 margem = ((valor_atual_venda - custo) / custo) * 100 if custo > 0 else 0
@@ -147,24 +160,29 @@ def sistema_principal():
             
             df_visual = pd.DataFrame(tabela_visual)
             
+            # KPIs Financeiros
             k1, k2, k3 = st.columns(3)
             k1.metric("Patrimônio Total", f"R$ {patrimonio_total:,.2f}")
             k2.metric("Custo Total", f"R$ {custo_total_carteira:,.2f}")
             lucro_total = patrimonio_total - custo_total_carteira
             k3.metric("Resultado", f"R$ {lucro_total:,.2f}", delta=f"{(lucro_total/custo_total_carteira)*100:.1f}%" if custo_total_carteira else 0)
             
+            # Tabela Colorida
             st.dataframe(df_visual.style.applymap(lambda x: 'color: green' if x > 0 else 'color: red', subset=['Lucro']), use_container_width=True)
             
+            # Remoção
             id_del = st.number_input("ID para remover", min_value=0, step=1)
-            if st.button("🗑️ Remover"):
+            if st.button("🗑️ Remover Lote"):
                 banco.remover_item_carteira(id_del)
                 st.rerun()
         else:
-            st.info("Carteira vazia.")
+            st.info("Carteira vazia. Adicione suas milhas acima!")
 
-    # ABA: MERCADO
+    # ==========================================================================
+    # ABA: ANÁLISE DE MERCADO
+    # ==========================================================================
     elif menu == "Análise de Mercado":
-        st.header("📊 Cotações (Hotmilhas)")
+        st.header("📊 Cotações de Venda (Hotmilhas - 90d)")
         if not df_cotacoes.empty:
             cols = st.columns(3)
             programas = ["Latam", "Smiles", "Azul"]
@@ -173,14 +191,25 @@ def sistema_principal():
                 with cols[i]:
                     if not dados_prog.empty:
                         atual = dados_prog.iloc[-1]['cpm']
-                        st.metric(prog, f"R$ {atual:.2f}")
+                        
+                        # Cálculo de Variação
+                        delta = 0
+                        if len(dados_prog) > 1:
+                            anterior = dados_prog.iloc[-2]['cpm']
+                            delta = atual - anterior
+                            
+                        st.metric(prog, f"R$ {atual:.2f}", delta=f"{delta:.2f}")
                         st.line_chart(dados_prog, x="data_hora", y="cpm")
                     else:
                         st.metric(prog, "Sem dados")
+        else:
+            st.warning("Aguardando o robô rodar pela primeira vez...")
 
+    # ==========================================================================
     # ABA: PROMOÇÕES
+    # ==========================================================================
     elif menu == "Promoções":
-        st.header("🔥 Radar de Promoções")
+        st.header("🔥 Radar de Promoções (Blogs)")
         def carregar_promocoes():
             try:
                 conexao = sqlite3.connect("milhas.db")
@@ -190,9 +219,9 @@ def sistema_principal():
         df_promos = carregar_promocoes()
         if not df_promos.empty:
             for index, row in df_promos.iterrows():
-                st.markdown(f"**{row['data_hora'][5:10]}** | [{row['titulo']}]({row['link']})")
+                st.markdown(f"**{row['data_hora'][5:10]}** | [{row['titulo']}]({row['link']}) _via {row['origem']}_")
         else:
-            st.info("Nenhuma promoção recente.")
+            st.info("Nenhuma promoção recente detectada.")
 
 # ==============================================================================
 # CONTROLE PRINCIPAL (MAIN)
