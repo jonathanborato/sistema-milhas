@@ -14,7 +14,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# SEU LINK DA LOGO (Certifique-se que o arquivo existe no GitHub)
+# SEU LINK DA LOGO
 LOGO_URL = "https://raw.githubusercontent.com/jonathanborato/sistema-milhas/main/logo.png"
 
 # --- 2. CONFIGURAÇÃO SUPABASE ---
@@ -172,13 +172,19 @@ def pegar_ultimo_p2p(programa):
 # --- INICIALIZA ---
 iniciar_banco()
 
-# --- ESTILIZAÇÃO CSS (DESIGN AZUL) ---
+# --- ESTILIZAÇÃO CSS AVANÇADA ---
 st.markdown("""
 <style>
+    /* Remove espaço branco do topo */
+    .block-container {
+        padding-top: 1rem !important;
+        padding-bottom: 1rem !important;
+    }
+    
     /* Estilo do Botão Principal (Azul da Logo) */
     div.stButton > button {
         width: 100%;
-        background-color: #0E436B; /* Azul Marinho da Logo */
+        background-color: #0E436B; /* Azul Marinho */
         color: white;
         border: none;
         padding: 10px;
@@ -186,15 +192,21 @@ st.markdown("""
         font-weight: bold;
     }
     div.stButton > button:hover {
-        background-color: #082d4a; /* Azul mais escuro no mouseover */
+        background-color: #082d4a;
         color: white;
     }
-    /* Estilo dos Cards */
+    /* Cards e Métricas */
     .metric-card {
         background: #f0f2f6; 
         padding: 15px; 
         border-radius: 8px;
         box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+    }
+    /* Centralizar Imagens */
+    [data-testid="stImage"] {
+        display: block;
+        margin-left: auto;
+        margin-right: auto;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -210,16 +222,15 @@ if 'user' not in st.session_state: st.session_state['user'] = None
 # TELA DE LOGIN
 # ==============================================================================
 def tela_login():
-    # Layout de 3 colunas para centralizar
-    c1, c2, c3 = st.columns([1, 1.5, 1])
+    # Colunas para centralizar o formulário
+    c1, c2, c3 = st.columns([1, 2, 1])
     
     with c2:
-        # LOGO CENTRALIZADA
-        l, m, r = st.columns([1, 2, 1])
-        with m:
-            st.image(LOGO_URL, use_column_width=True)
+        # LOGO MAIOR E CENTRALIZADA
+        st.image(LOGO_URL, width=300) # Aumentado para 300px
         
-        st.markdown("<h3 style='text-align: center; color: #0E436B;'>Acesso ao Sistema</h3>", unsafe_allow_html=True)
+        # Margem negativa para colar o texto na logo
+        st.markdown("<h3 style='text-align: center; color: #0E436B; margin-top: -20px;'>Acesso ao Sistema</h3>", unsafe_allow_html=True)
         
         tab1, tab2 = st.tabs(["ENTRAR", "CRIAR CONTA"])
         
@@ -260,12 +271,10 @@ def sistema_logado():
     if plano == "Admin": opcoes.append("👑 Gestão de Usuários")
 
     with st.sidebar:
-        # LOGO CENTRALIZADA NO MENU
-        l, m, r = st.columns([1, 4, 1])
-        with m:
-            st.image(LOGO_URL, use_column_width=True)
-            
-        st.markdown(f"<p style='text-align: center;'>Olá, <b>{user['nome'].split()[0]}</b></p>", unsafe_allow_html=True)
+        st.image(LOGO_URL, width=200) # Logo no menu
+        
+        # Centralizando o texto de boas vindas
+        st.markdown(f"<div style='text-align: center; margin-bottom: 10px;'>Olá, <b>{user['nome'].split()[0]}</b></div>", unsafe_allow_html=True)
         
         if plano == "Admin": st.success("👑 ADMIN")
         elif plano == "Pro": st.success("⭐ PRO")
