@@ -1,199 +1,247 @@
 import streamlit as st
 import pandas as pd
-import sqlite3
+import banco # Importa nosso backend limpo
 import time
-import hashlib
-from datetime import datetime
 
-# --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Milhas Pro System", page_icon="✈️", layout="wide")
+# --- CONFIGURAÇÃO VISUAL (PRIMEIRA LINHA) ---
+st.set_page_config(
+    page_title="MilhasPro | Intelligence",
+    page_icon="✈️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# ==============================================================================
-# 1. FUNÇÕES DE BANCO DE DADOS (BLINDADAS)
-# ==============================================================================
-NOME_BANCO = "milhas.db"
+# Inicializa Backend
+banco.iniciar_banco()
 
-def iniciar_banco():
-    con = sqlite3.connect(NOME_BANCO)
-    cur = con.cursor()
-    cur.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
-    cur.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
-    cur.execute('CREATE TABLE IF NOT EXISTS carteira (id INTEGER PRIMARY KEY AUTOINCREMENT, data_compra TEXT, programa TEXT, quantidade INTEGER, custo_total REAL, cpm_medio REAL)')
-    cur.execute('CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, nome TEXT, senha_hash TEXT, data_cadastro TEXT)')
-    cur.execute('CREATE TABLE IF NOT EXISTS mercado_p2p (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, grupo_nome TEXT, programa TEXT, tipo TEXT, valor REAL, observacao TEXT)')
-    con.commit()
-    con.close()
+# --- CSS PERSONALIZADO (PARA FICAR BONITO) ---
+st.markdown("""
+<style>
+    .metric-card {background-color: #f0f2f6; padding: 20px; border-radius: 10px; border-left: 5px solid #ff4b4b;}
+    .big-font {font-size: 20px !important;}
+    div.stButton > button:first-child {width: 100%;}
+</style>
+""", unsafe_allow_html=True)
 
-def criar_hash(senha):
-    return hashlib.sha256(senha.encode()).hexdigest()
-
-def verificar_login(email, senha):
-    try:
-        con = sqlite3.connect(NOME_BANCO)
-        cur = con.cursor()
-        senha_teste = criar_hash(senha)
-        cur.execute("SELECT nome FROM usuarios WHERE email = ? AND senha_hash = ?", (email, senha_teste))
-        res = cur.fetchone()
-        con.close()
-        return res[0] if res else None
-    except: return None
-
-def cadastrar_usuario(email, nome, senha):
-    try:
-        con = sqlite3.connect(NOME_BANCO)
-        cur = con.cursor()
-        if cur.execute("SELECT id FROM usuarios WHERE email = ?", (email,)).fetchone():
-            con.close(); return False
-        cur.execute("INSERT INTO usuarios (email, nome, senha_hash, data_cadastro) VALUES (?, ?, ?, ?)", 
-                    (email, nome, criar_hash(senha), datetime.now().strftime("%Y-%m-%d")))
-        con.commit(); con.close(); return True
-    except: return False
-
-def ler_carteira():
-    try:
-        con = sqlite3.connect(NOME_BANCO)
-        df = pd.read_sql_query("SELECT * FROM carteira", con)
-        con.close()
-        return df
-    except: return pd.DataFrame()
-
-def adicionar_milhas(prog, qtd, custo):
-    con = sqlite3.connect(NOME_BANCO)
-    cpm = custo/(qtd/1000)
-    con.execute('INSERT INTO carteira (data_compra, programa, quantidade, custo_total, cpm_medio) VALUES (?, ?, ?, ?, ?)', 
-                (datetime.now().strftime("%Y-%m-%d"), prog, qtd, custo, cpm))
-    con.commit(); con.close()
-
-def remover_item_carteira(id_item):
-    con = sqlite3.connect(NOME_BANCO)
-    con.execute('DELETE FROM carteira WHERE id = ?', (id_item,))
-    con.commit(); con.close()
-
-# AQUI ESTAVA O ERRO - REESCREVI PARA FICAR SEGURO
-def adicionar_oferta_p2p(grupo, programa, tipo, valor, obs):
-    con = sqlite3.connect(NOME_BANCO)
-    
-    # Separamos as variaveis para evitar erro de sintaxe
-    agora = datetime.now().strftime("%Y-%m-%d %H:%M")
-    sql = 'INSERT INTO mercado_p2p (data_hora, grupo_nome, programa, tipo, valor, observacao) VALUES (?, ?, ?, ?, ?, ?)'
-    dados = (agora, grupo, programa, tipo, valor, obs)
-    
-    con.execute(sql, dados)
-    con.commit()
-    con.close()
-
-# Inicializa o banco ao abrir o site
-iniciar_banco()
+# --- GESTÃO DE SESSÃO ---
+if 'user' not in st.session_state:
+    st.session_state['user'] = None
 
 # ==============================================================================
-# 2. SISTEMA DE LOGIN
+# VIEW 1: LANDING PAGE & LOGIN (A PORTA DE ENTRADA)
 # ==============================================================================
-if 'logado' not in st.session_state:
-    st.session_state['logado'] = False
-    st.session_state['usuario_nome'] = ""
-
 def tela_login():
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.image("https://cdn-icons-png.flaticon.com/512/723/723955.png", width=80)
-        st.title("Milhas Pro System")
+    c1, c2, c3 = st.columns([1, 1.5, 1])
+    
+    with c2:
+        st.markdown("<div style='text-align: center; margin-top: 50px;'><h1>✈️ MilhasPro</h1><p>Sistema Profissional de Gestão de Ativos Aéreos</p></div>", unsafe_allow_html=True)
         
-        tab1, tab2 = st.tabs(["Entrar", "Criar Conta"])
+        tab_entrar, tab_criar = st.tabs(["🔒 Acessar Painel", "✨ Criar Nova Conta"])
         
-        with tab1:
-            email = st.text_input("E-mail")
-            senha = st.text_input("Senha", type="password")
-            if st.button("Entrar", type="primary"):
+        with tab_entrar:
+            email = st.text_input("E-mail Profissional", placeholder="seu@email.com")
+            senha = st.text_input("Sua Senha", type="password")
+            
+            if st.button("ENTRAR NO SISTEMA", type="primary"):
+                # 1. Backdoor do Admin (Secrets)
                 try:
                     if email == st.secrets["admin"]["email"] and senha == st.secrets["admin"]["senha"]:
-                        st.session_state['logado'] = True; st.session_state['usuario_nome'] = st.secrets["admin"]["nome"]
+                        st.session_state['user'] = {"nome": st.secrets["admin"]["nome"], "email": email, "plano": "Admin"}
                         st.rerun()
                 except: pass
                 
-                user = verificar_login(email, senha)
-                if user:
-                    st.session_state['logado'] = True; st.session_state['usuario_nome'] = user
+                # 2. Login Real
+                usuario = banco.autenticar_usuario(email, senha)
+                if usuario:
+                    st.session_state['user'] = {"nome": usuario['nome'], "email": email, "plano": usuario['plano']}
+                    st.toast("Login realizado com sucesso!", icon="✅")
+                    time.sleep(1)
                     st.rerun()
-                else: st.error("Dados inválidos.")
+                else:
+                    st.error("Credenciais inválidas.")
         
-        with tab2:
-            st.warning("Cadastros no plano gratuito podem ser resetados.")
-            nnome = st.text_input("Nome")
-            nemail = st.text_input("E-mail Novo")
-            nsenha = st.text_input("Nova Senha", type="password")
-            if st.button("Cadastrar"):
-                if cadastrar_usuario(nemail, nnome, nsenha): st.success("Sucesso! Faça login.")
-                else: st.error("Erro ao cadastrar.")
+        with tab_criar:
+            st.info("🚀 Comece a gerenciar suas milhas hoje.")
+            nome = st.text_input("Nome Completo")
+            cad_email = st.text_input("E-mail para cadastro")
+            cad_tel = st.text_input("WhatsApp")
+            cad_senha = st.text_input("Defina uma senha", type="password")
+            
+            if st.button("CRIAR CONTA GRATUITA"):
+                if len(cad_senha) < 4:
+                    st.warning("Senha muito curta.")
+                else:
+                    ok, msg = banco.registrar_usuario(nome, cad_email, cad_senha, cad_tel)
+                    if ok:
+                        st.success(msg)
+                        st.balloons()
+                    else:
+                        st.error(msg)
 
 # ==============================================================================
-# 3. SISTEMA PRINCIPAL (DASHBOARD)
+# VIEW 2: O SISTEMA (DASHBOARD)
 # ==============================================================================
-def sistema_principal():
+def sistema_logado():
+    user = st.session_state['user']
+    
+    # --- SIDEBAR PROFISSIONAL ---
     with st.sidebar:
-        st.image("https://cdn-icons-png.flaticon.com/512/723/723955.png", width=80)
-        st.write(f"Olá, **{st.session_state['usuario_nome']}**")
-        if st.button("Sair"): st.session_state['logado'] = False; st.rerun()
-        st.divider()
-        menu = st.radio("Menu", ["Minha Carteira", "Mercado (Hotmilhas)", "Mercado P2P", "Promoções"])
-
-    st.title("🏦 Gestão de Milhas")
-
-    try:
-        con = sqlite3.connect(NOME_BANCO)
-        df_cotacoes = pd.read_sql_query("SELECT * FROM historico ORDER BY data_hora ASC", con)
-        con.close()
-        if not df_cotacoes.empty:
-            df_cotacoes['data_hora'] = pd.to_datetime(df_cotacoes['data_hora'])
-            if 'email' in df_cotacoes.columns: df_cotacoes = df_cotacoes.rename(columns={'email': 'programa'})
-    except: df_cotacoes = pd.DataFrame()
-
-    if menu == "Minha Carteira":
-        st.subheader("💼 Seu Estoque")
-        with st.expander("➕ Adicionar"):
-            c1, c2, c3 = st.columns(3)
-            p = c1.selectbox("Programa", ["Latam Pass", "Smiles", "TudoAzul", "Livelo"])
-            q = c2.number_input("Qtd", 1000, step=1000)
-            v = c3.number_input("Custo R$", 0.0, step=10.0)
-            if st.button("Salvar"): adicionar_milhas(p, q, v); st.rerun()
+        st.title("✈️ MilhasPro")
+        st.write(f"Bem-vindo, **{user['nome']}**")
         
-        dfc = ler_carteira()
-        if not dfc.empty:
-            st.dataframe(dfc)
-            rid = st.number_input("ID para remover", step=1)
-            if st.button("Remover"): remover_item_carteira(rid); st.rerun()
-        else: st.info("Carteira Vazia")
+        # Badge do Plano
+        if user['plano'] == "Admin":
+            st.success("👑 MODO ADMIN")
+        elif user['plano'] == "Pro":
+            st.success("⭐ PLANO PRO")
+        else:
+            st.info("🔹 PLANO FREE")
+            st.caption("Faça upgrade para ver análises P2P.")
+            
+        st.markdown("---")
+        menu = st.radio("Menu Principal", ["Dashboard Geral", "Minha Carteira", "Mercado & Cotações", "Promoções"])
+        
+        st.markdown("---")
+        if st.button("Sair"):
+            st.session_state['user'] = None
+            st.rerun()
 
-    elif menu == "Mercado (Hotmilhas)":
-        st.subheader("📊 Cotações Automáticas")
+    # --- CARREGAMENTO DE DADOS ---
+    df_cotacoes = banco.ler_dados_historico()
+    
+    # --- PÁGINA: DASHBOARD GERAL ---
+    if menu == "Dashboard Geral":
+        st.header(f"Olá, {user['nome'].split()[0]}")
+        
+        # Últimas Cotações (Resumo)
+        if not df_cotacoes.empty:
+            k1, k2, k3 = st.columns(3)
+            # Pega as ultimas de cada programa
+            for i, p in enumerate(["Latam", "Smiles", "Azul"]):
+                d = df_cotacoes[df_cotacoes['programa'].str.contains(p, case=False, na=False)]
+                col = [k1, k2, k3][i]
+                if not d.empty:
+                    atual = d.iloc[-1]['cpm']
+                    delta = atual - d.iloc[-2]['cpm'] if len(d) > 1 else 0
+                    col.metric(f"Venda {p}", f"R$ {atual:.2f}", f"{delta:.2f}")
+                else:
+                    col.metric(p, "--")
+        
+        st.markdown("### 📈 Visão Rápida de Tendência")
         if not df_cotacoes.empty:
             st.line_chart(df_cotacoes, x="data_hora", y="cpm", color="programa")
-        else: st.warning("Sem dados do robô ainda.")
+        else:
+            st.warning("Aguardando dados do Robô. Certifique-se que o GitHub Actions rodou.")
 
-    elif menu == "Mercado P2P":
-        st.subheader("📢 Radar Manual")
-        with st.form("p2p"):
-            c1, c2 = st.columns(2)
-            g = c1.text_input("Grupo")
-            pr = c2.selectbox("Prog", ["Latam", "Smiles", "Azul"])
-            t = st.radio("Tipo", ["VENDA", "COMPRA"])
-            val = st.number_input("Valor", 15.0)
-            obs = st.text_input("Obs")
-            if st.form_submit_button("Salvar"): adicionar_oferta_p2p(g, pr, t, val, obs); st.rerun()
+    # --- PÁGINA: CARTEIRA ---
+    elif menu == "Minha Carteira":
+        st.header("💼 Gestão de Ativos")
         
-        try:
-            con = sqlite3.connect(NOME_BANCO)
-            st.dataframe(pd.read_sql_query("SELECT * FROM mercado_p2p ORDER BY id DESC", con))
-            con.close()
-        except: pass
+        # Área de Adicionar
+        with st.expander("➕ Adicionar Novo Lote de Milhas", expanded=True):
+            c1, c2, c3, c4 = st.columns([2, 2, 2, 1])
+            prog = c1.selectbox("Programa", ["Latam Pass", "Smiles", "TudoAzul", "Livelo", "Esfera"])
+            qtd = c2.number_input("Qtd Milhas", 1000, step=1000)
+            custo = c3.number_input("Custo Total (R$)", 0.0, step=10.0)
+            c4.write("")
+            c4.write("")
+            if c4.button("Salvar"):
+                banco.adicionar_carteira(user['email'], prog, qtd, custo)
+                st.toast("Lote adicionado!", icon="💾")
+                time.sleep(0.5)
+                st.rerun()
 
+        # Exibição da Tabela
+        df_cart = banco.ler_carteira_usuario(user['email'])
+        
+        if not df_cart.empty:
+            st.markdown("### Seu Estoque Atual")
+            
+            # Tabela Visual
+            view_data = []
+            total_investido = 0
+            
+            for _, row in df_cart.iterrows():
+                # Tenta pegar preço de mercado
+                filtro = df_cotacoes[df_cotacoes['programa'].str.contains(row['programa'].split()[0], case=False, na=False)]
+                preco_mercado = filtro.iloc[-1]['cpm'] if not filtro.empty else 0.0
+                
+                val_mercado = (row['quantidade']/1000) * preco_mercado
+                lucro = val_mercado - row['custo_total']
+                margem = (lucro / row['custo_total']) * 100 if row['custo_total'] > 0 else 0
+                
+                total_investido += row['custo_total']
+                
+                view_data.append({
+                    "ID": row['id'],
+                    "Programa": row['programa'],
+                    "Qtd": f"{row['quantidade']:,.0f}",
+                    "CPM Médio": f"R$ {row['cpm_medio']:.2f}",
+                    "Valor Mercado": f"R$ {val_mercado:,.2f}",
+                    "Lucro (Est.)": lucro,
+                    "Margem": f"{margem:.1f}%"
+                })
+            
+            df_view = pd.DataFrame(view_data)
+            
+            # Cards de Resumo da Carteira
+            rc1, rc2 = st.columns(2)
+            rc1.metric("Total Investido", f"R$ {total_investido:,.2f}")
+            rc2.info("Dica: Venda lotes com Margem acima de 15%")
+
+            # Tabela com Cores
+            st.dataframe(
+                df_view.style.background_gradient(cmap='RdYlGn', subset=['Lucro (Est.)']),
+                use_container_width=True
+            )
+            
+            # Remover Lote
+            st.markdown("---")
+            col_del, _ = st.columns([1, 3])
+            id_del = col_del.number_input("ID para excluir", min_value=0)
+            if col_del.button("Excluir Lote Selecionado"):
+                banco.remover_carteira(id_del)
+                st.rerun()
+        else:
+            st.info("Sua carteira está vazia. Adicione seus ativos acima.")
+
+    # --- PÁGINA: MERCADO ---
+    elif menu == "Mercado & Cotações":
+        st.header("📊 Análise de Mercado (Hotmilhas)")
+        
+        if df_cotacoes.empty:
+            st.warning("Sem dados. O robô precisa rodar pelo menos uma vez.")
+        else:
+            # Filtros
+            selecao = st.multiselect("Filtrar Programas", df_cotacoes['programa'].unique(), default=df_cotacoes['programa'].unique())
+            df_filtrado = df_cotacoes[df_cotacoes['programa'].isin(selecao)]
+            
+            st.line_chart(df_filtrado, x="data_hora", y="cpm", color="programa")
+            
+            with st.expander("Ver Dados Brutos (Tabela)"):
+                st.dataframe(df_filtrado.sort_values(by='data_hora', ascending=False), use_container_width=True)
+
+    # --- PÁGINA: PROMOÇÕES ---
     elif menu == "Promoções":
-        st.subheader("🔥 Radar")
+        st.header("🔥 Radar de Oportunidades")
         try:
-            con = sqlite3.connect(NOME_BANCO)
-            dfp = pd.read_sql_query("SELECT * FROM promocoes ORDER BY id DESC LIMIT 15", con)
+            con = sqlite3.connect("milhas.db")
+            dfp = pd.read_sql_query("SELECT * FROM promocoes ORDER BY id DESC LIMIT 20", con)
             con.close()
-            for _, r in dfp.iterrows(): st.markdown(f"[{r['titulo']}]({r['link']})")
-        except: st.write("Nada.")
+            
+            if not dfp.empty:
+                for _, r in dfp.iterrows():
+                    with st.container():
+                        st.markdown(f"#### [{r['titulo']}]({r['link']})")
+                        st.caption(f"Fonte: {r['origem']} | Detectado em: {r['data_hora']}")
+                        st.divider()
+            else:
+                st.info("Nenhuma promoção detectada recentemente.")
+        except:
+            st.error("Erro ao carregar promoções.")
 
-if st.session_state['logado']: sistema_principal()
-else: tela_login()
+# --- ROTEADOR ---
+if st.session_state['user']:
+    sistema_logado()
+else:
+    tela_login()
