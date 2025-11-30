@@ -9,7 +9,8 @@ from datetime import datetime
 # --- 1. CONFIGURAÇÃO INICIAL ---
 st.set_page_config(
     page_title="MilhasPro System",
-    page_icon="✈️",
+    # MUDANÇA 1: Ícone da aba do navegador
+    page_icon="🚀",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -46,7 +47,7 @@ def iniciar_banco():
 
 def criar_hash(senha): return hashlib.sha256(senha.encode()).hexdigest()
 
-# --- VALIDADOR DE SENHA FORTE (ATUALIZADO) ---
+# --- VALIDADOR DE SENHA FORTE ---
 def validar_senha_forte(senha):
     if len(senha) < 8: return False, "Mínimo 8 caracteres."
     if not re.search(r"[a-z]", senha): return False, "Precisa de letra minúscula."
@@ -175,7 +176,8 @@ if 'erro_login' not in st.session_state: st.session_state['erro_login'] = False
 def tela_login():
     c1, c2, c3 = st.columns([1, 1.5, 1])
     with c2:
-        try: st.image("https://cdn-icons-png.flaticon.com/512/723/723955.png", width=80)
+        # MUDANÇA 2: Imagem da tela de login (Foguete)
+        try: st.image("https://cdn-icons-png.flaticon.com/512/1356/1356479.png", width=100)
         except: pass
         st.markdown("<h1 style='text-align: center;'>MilhasPro System</h1>", unsafe_allow_html=True)
         
@@ -186,9 +188,7 @@ def tela_login():
             senha = st.text_input("Senha", type="password", key="log_pass")
             
             if st.button("Acessar", type="primary", key="btn_log"):
-                # Reset do estado de erro ao tentar logar
                 st.session_state['erro_login'] = False
-                
                 try:
                     if email == st.secrets["admin"]["email"] and senha == st.secrets["admin"]["senha"]:
                         st.session_state['user'] = {"nome": st.secrets["admin"]["nome"], "plano": "Admin", "email": email}
@@ -201,16 +201,14 @@ def tela_login():
                     st.success(f"Olá, {user['nome']}!"); time.sleep(0.5); st.rerun()
                 else:
                     st.error("E-mail ou senha incorretos.")
-                    st.session_state['erro_login'] = True # Ativa a opção de recuperação
+                    st.session_state['erro_login'] = True
             
-            # MOSTRAR RECUPERAÇÃO APENAS SE ERROU A SENHA
             if st.session_state['erro_login']:
                 st.markdown("---")
                 with st.expander("Esqueci minha senha 🆘"):
-                    rec_email = st.text_input("Confirme seu e-mail para recuperação", value=email)
-                    if st.button("Solicitar Reset de Senha"):
-                        # Aqui você poderia integrar com email real no futuro
-                        st.info("📨 Solicitação registrada! Entre em contato com o suporte (WhatsApp) para validar sua identidade e receber a senha temporária.")
+                    st.text_input("Confirme seu e-mail", value=email)
+                    if st.button("Solicitar Reset"):
+                        st.info("📨 Solicitação registrada! Entre em contato com o suporte.")
         
         with tab2:
             st.info("Sua senha deve conter: Maiúscula, Minúscula, Número e Especial (@#$%).")
@@ -235,7 +233,8 @@ def sistema_logado():
     if plano == "Admin": opcoes.append("👑 Gestão de Usuários")
 
     with st.sidebar:
-        try: st.image("https://cdn-icons-png.flaticon.com/512/723/723955.png", width=80)
+        # MUDANÇA 3: Imagem da barra lateral (Foguete)
+        try: st.image("https://cdn-icons-png.flaticon.com/512/1356/1356479.png", width=80)
         except: pass
         st.write(f"Olá, **{user['nome']}**")
         if plano == "Admin": st.success("👑 ADMIN")
