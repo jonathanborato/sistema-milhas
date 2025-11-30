@@ -23,18 +23,19 @@ def iniciar_banco():
     conexao.commit()
     conexao.close()
 
-def salvar_cotacao(email, dias, valor, cpm):
-    """Guarda uma linha de cotação no banco"""
+def salvar_cotacao(programa, dias, valor, cpm): # Mudamos 'email' para 'programa'
     conexao = sqlite3.connect(NOME_BANCO)
     cursor = conexao.cursor()
     
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
+    # A tabela usa a coluna 'email', mas vamos salvar o nome do programa nela
+    # Não precisa recriar a tabela, só usar a coluna existente para guardar "Latam", "Smiles", etc.
     cursor.execute('''
         INSERT INTO historico (data_hora, email, prazo_dias, valor_total, cpm)
         VALUES (?, ?, ?, ?, ?)
-    ''', (agora, email, dias, valor, cpm))
+    ''', (agora, programa, dias, valor, cpm))
     
     conexao.commit()
     conexao.close()
-    print(f"💾 Salvo no banco: {dias} dias | R$ {cpm:.2f}/milheiro")
+    print(f"💾 Salvo: {programa} | R$ {cpm:.2f}")
