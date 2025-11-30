@@ -9,14 +9,20 @@ import banco
 SEU_EMAIL = "jonathanfborato@gmail.com"
 QTD_MILHAS = "100000"
 
-# Dicionário dos Programas (ID no site : Nome Amigável)
 PROGRAMAS = {
-    "1": "Smiles (Gol)",
-    "2": "Latam Pass",
+    "1": "Smiles",
+    "2": "Latam",
     "3": "TudoAzul"
 }
 
-# --- SEGREDOS ---
+# Metas de Venda (Se passar disso, é Ouro!)
+METAS = {
+    "Smiles": 17.80,
+    "Latam": 28.50,
+    "TudoAzul": 22.00
+}
+
+# Segredos
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
@@ -30,30 +36,30 @@ async def enviar_telegram(mensagem):
 
 async def rodar_cotacao():
     banco.iniciar_banco()
-    print("🚀 Iniciando Varredura de Mercado (Smiles, Latam, Azul)...")
+    print("🚀 Iniciando Análise de Mercado...")
     
-    relatorio_final = "✈️ *RESUMO DO MERCADO DE MILHAS* ✈️\n"
+    # Cabeçalho da Mensagem
+    relatorio = "📊 *BOLETIM DE MILHAS (90d)* 📊\n\n"
+    tem_oportunidade = False
     
     async with async_playwright() as p:
-        # headless=True para rodar na nuvem
+        # headless=True para nuvem
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context()
         page = await context.new_page()
         
-        # --- O LOOP MESTRE ---
-        for id_programa, nome_programa in PROGRAMAS.items():
-            print(f"\n🔍 Cotando: {nome_programa}...")
+        for id_prog, nome_prog in PROGRAMAS.items():
+            print(f"🔍 Analisando: {nome_prog}...")
             
             try:
+                # 1. Recuperar preço de ONTEM (Memória)
+                cpm_ontem = banco.pegar_ultimo_preco(nome_prog)
+                
+                # 2. Ir buscar preço de HOJE (Scraping)
                 await page.goto("https://hotmilhas.com.br/")
-                
-                # Preenche E-mail
                 await page.get_by_role("textbox", name="Digite seu e-mail *").fill(SEU_EMAIL)
+                await page.get_by_role("combobox").select_option(id_prog)
                 
-                # Seleciona o Programa da vez (1, 2 ou 3)
-                await page.get_by_role("combobox").select_option(id_programa)
-                
-                # Preenche Quantidade
                 campo_qtd = page.get_by_role("textbox", name="Quantidade de milhas *")
                 await campo_qtd.click()
                 await campo_qtd.fill(QTD_MILHAS)
@@ -62,47 +68,66 @@ async def rodar_cotacao():
                 except:
                     await page.keyboard.press("Enter")
 
-                # Clica em Cotar
                 await page.locator("#form").get_by_role("button", name="Cotar minhas milhas").click(force=True)
-
-                # Espera o preço
-                await page.wait_for_selector("text=R$", timeout=20000)
                 
-                # Lê os dados
+                # Leitura
+                await page.wait_for_selector("text=R$", timeout=20000)
                 texto = await page.locator("body").inner_text()
                 
-                # Regex para pegar o preço de 90 dias (ou o maior prazo)
-                # Procura por "90 dias" e pega o valor associado
                 padrao = r"(?:em|Até)\s+(90)\s+dia[s]?.*?R\$\s?([\d\.,]+)"
                 match = re.search(padrao, texto, re.DOTALL | re.IGNORECASE)
                 
                 if match:
                     valor_texto = match.group(2)
                     valor_float = float(valor_texto.replace('.', '').replace(',', '.'))
-                    cpm = valor_float / 100 # Para 100k milhas, dividir por 100 dá o CPM
+                    cpm_hoje = valor_float / 100
                     
-                    print(f"✅ {nome_programa}: R$ {cpm:.2f}/milheiro")
+                    # 3. ANÁLISE DE INTELIGÊNCIA (Comparação)
+                    icone = "⚪" # Igual
+                    diff = cpm_hoje - cpm_ontem
                     
-                    # Salva no Banco
-                    banco.salvar_cotacao(nome_programa, 90, valor_float, cpm)
+                    if diff > 0.10:
+                        icone = "🟢 ⬆️" # Subiu
+                    elif diff < -0.10:
+                        icone = "🔴 ⬇️" # Caiu
                     
-                    # Adiciona ao relatório
-                    relatorio_final += f"\n🟦 *{nome_programa}*\n   💰 Venda (90d): R$ {cpm:.2f}\n"
+                    # Verifica se bateu a meta de lucro
+                    meta_aviso = ""
+                    if cpm_hoje >= METAS.get(nome_prog, 100):
+                        meta_aviso = "🔥 *PREÇO TOP!* "
+                        tem_oportunidade = True
+                    
+                    # Monta a linha do relatório
+                    relatorio += f"{icone} *{nome_prog}*: R$ {cpm_hoje:.2f}\n"
+                    
+                    if diff != 0 and cpm_ontem > 0:
+                        relatorio += f"   _(Antes: R$ {cpm_ontem:.2f})_\n"
+                    
+                    if meta_aviso:
+                        relatorio += f"   {meta_aviso}\n"
+                        
+                    # Salva no banco
+                    banco.salvar_cotacao(nome_prog, 90, valor_float, cpm_hoje)
+                    print(f"✅ {nome_prog}: R$ {cpm_hoje:.2f}")
+                    
                 else:
-                    print(f"⚠️ Não achei preço de 90 dias para {nome_programa}")
-                    relatorio_final += f"\n🔻 *{nome_programa}*: Sem cotação 90d\n"
+                    relatorio += f"⚠️ *{nome_prog}*: Sem oferta 90d\n"
 
             except Exception as e:
-                print(f"❌ Erro ao cotar {nome_programa}: {e}")
-                relatorio_final += f"\n🔻 *{nome_programa}*: Erro ao acessar\n"
+                print(f"Erro {nome_prog}: {e}")
+                relatorio += f"❌ *{nome_prog}*: Erro\n"
             
-            # Limpa os cookies para a próxima cotação não bugar
             await context.clear_cookies()
         
         await browser.close()
         
-        # Envia o resumão no final
-        await enviar_telegram(relatorio_final)
+        # Só adiciona rodapé se tiver notícia boa
+        if tem_oportunidade:
+            relatorio += "\n💰 *HORA DE VENDER!* Consulte o Painel."
+        
+        relatorio += "\n[Ver Dashboard Completo](https://share.streamlit.io)" # Você pode por seu link aqui
+        
+        await enviar_telegram(relatorio)
 
 if __name__ == "__main__":
     asyncio.run(rodar_cotacao())
