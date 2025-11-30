@@ -28,10 +28,11 @@ def get_supabase():
         return create_client(url, key)
     except: return None
 
-# --- 3. BANCO LOCAL (DADOS) ---
+# --- 3. BANCO LOCAL (DADOS DO ROBÔ) ---
 NOME_BANCO_LOCAL = "milhas.db"
 
-def conectar_local(): return sqlite3.connect(NOME_BANCO_LOCAL)
+def conectar_local():
+    return sqlite3.connect(NOME_BANCO_LOCAL)
 
 def iniciar_banco():
     con = conectar_local()
@@ -40,23 +41,35 @@ def iniciar_banco():
     cur.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
     cur.execute('CREATE TABLE IF NOT EXISTS carteira (id INTEGER PRIMARY KEY AUTOINCREMENT, usuario_email TEXT, data_compra TEXT, programa TEXT, quantidade INTEGER, custo_total REAL, cpm_medio REAL)')
     cur.execute('CREATE TABLE IF NOT EXISTS mercado_p2p (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, grupo_nome TEXT, programa TEXT, tipo TEXT, valor REAL, observacao TEXT)')
+    # Fallback local
     cur.execute('CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, nome TEXT, senha_hash TEXT, data_cadastro TEXT)')
-    con.commit(); con.close()
+    con.commit()
+    con.close()
 
-def criar_hash(senha): return hashlib.sha256(senha.encode()).hexdigest()
+def criar_hash(senha):
+    return hashlib.sha256(senha.encode()).hexdigest()
 
 # --- 4. FUNÇÕES DE USUÁRIO & ADMIN ---
+
 def registrar_usuario(nome, email, senha, telefone):
     sb = get_supabase()
     if sb:
         try:
             res = sb.table("usuarios").select("*").eq("email", email).execute()
             if len(res.data) > 0: return False, "E-mail já existe."
+            
             dados = {"email": email, "nome": nome, "senha_hash": criar_hash(senha), "telefone": telefone, "plano": "Free", "status": "Ativo"}
             sb.table("usuarios").insert(dados).execute()
             return True, "Conta criada! Faça login."
         except Exception as e: return False, f"Erro: {e}"
-    return False, "Erro conexão nuvem."
+    
+    # Fallback Local
+    try:
+        con = conectar_local()
+        con.execute("INSERT INTO usuarios (email, nome, senha_hash) VALUES (?, ?, ?)", (email, nome, criar_hash(senha)))
+        con.commit(); con.close()
+        return True, "Criado Localmente"
+    except: return False, "Erro local."
 
 def autenticar_usuario(email, senha):
     h = criar_hash(senha)
@@ -68,23 +81,40 @@ def autenticar_usuario(email, senha):
                 u = res.data[0]
                 return {"nome": u['nome'], "plano": u.get('plano', 'Free'), "email": email}
         except: pass
+    
+    # Fallback
+    con = conectar_local()
+    res = con.execute("SELECT nome FROM usuarios WHERE email = ? AND senha_hash = ?", (email, h)).fetchone()
+    con.close()
+    if res: return {"nome": res[0], "plano": "Local", "email": email}
     return None
 
-# --- NOVAS FUNÇÕES DE ADMIN ---
-def admin_listar_usuarios():
+# --- FUNÇÕES DE ADMINISTRAÇÃO AVANÇADA ---
+def admin_listar_todos():
     sb = get_supabase()
     if sb:
         try:
-            res = sb.table("usuarios").select("id, created_at, nome, email, telefone, plano, status").execute()
+            res = sb.table("usuarios").select("*").order("id", desc=True).execute()
             return pd.DataFrame(res.data)
         except: pass
     return pd.DataFrame()
 
-def admin_atualizar_plano(email_alvo, novo_plano):
+def admin_atualizar_dados(id_user, nome, email, telefone, plano, status):
     sb = get_supabase()
     if sb:
         try:
-            sb.table("usuarios").update({"plano": novo_plano}).eq("email", email_alvo).execute()
+            dados = {"nome": nome, "email": email, "telefone": telefone, "plano": plano, "status": status}
+            sb.table("usuarios").update(dados).eq("id", id_user).execute()
+            return True
+        except: return False
+    return False
+
+def admin_resetar_senha(id_user, nova_senha_texto):
+    sb = get_supabase()
+    if sb:
+        try:
+            novo_hash = criar_hash(nova_senha_texto)
+            sb.table("usuarios").update({"senha_hash": novo_hash}).eq("id", id_user).execute()
             return True
         except: return False
     return False
@@ -125,87 +155,90 @@ def adicionar_p2p(g, p, t, v, o):
 # --- INICIALIZA ---
 iniciar_banco()
 
-# --- COMPONENTE VISUAL: PAYWALL ---
+# --- CSS E COMPONENTES ---
+st.markdown("""<style>.stButton>button {width: 100%;} .metric-card {background: #f0f2f6; padding: 15px; border-radius: 8px;}</style>""", unsafe_allow_html=True)
+
 def mostrar_paywall():
-    st.markdown("---")
-    c1, c2, c3 = st.columns([1, 2, 1])
-    with c2:
-        st.error("🔒 BLOQUEADO")
-        st.info("Recurso exclusivo para assinantes PRO.")
-        st.markdown("**Contate o admin para liberar seu acesso.**")
-    st.markdown("---")
+    st.error("🔒 RECURSO PRO")
+    st.info("Faça o upgrade para acessar esta ferramenta.")
 
 # --- SESSÃO ---
 if 'user' not in st.session_state: st.session_state['user'] = None
 
 # ==============================================================================
-# VIEW 1: LOGIN
+# TELA DE LOGIN / CADASTRO / RECUPERAÇÃO
 # ==============================================================================
 def tela_login():
     c1, c2, c3 = st.columns([1, 1.5, 1])
     with c2:
         st.markdown("<h1 style='text-align: center;'>✈️ MilhasPro</h1>", unsafe_allow_html=True)
-        tab1, tab2 = st.tabs(["ENTRAR", "CRIAR CONTA"])
         
+        tab1, tab2, tab3 = st.tabs(["ENTRAR", "CRIAR CONTA", "ESQUECI A SENHA"])
+        
+        # TAB 1: LOGIN
         with tab1:
             email = st.text_input("E-mail", key="log_email")
             senha = st.text_input("Senha", type="password", key="log_pass")
             if st.button("Acessar", type="primary", key="btn_log"):
-                # Admin Secrets
                 try:
                     if email == st.secrets["admin"]["email"] and senha == st.secrets["admin"]["senha"]:
                         st.session_state['user'] = {"nome": st.secrets["admin"]["nome"], "plano": "Admin", "email": email}
                         st.rerun()
                 except: pass
                 
-                # User Normal
                 user = autenticar_usuario(email, senha)
                 if user:
                     st.session_state['user'] = user
-                    st.success("Bem-vindo!"); time.sleep(0.5); st.rerun()
-                else: st.error("Dados incorretos.")
+                    st.success(f"Olá, {user['nome']}!"); time.sleep(0.5); st.rerun()
+                else: st.error("Acesso negado.")
         
+        # TAB 2: CADASTRO
         with tab2:
-            st.info("Cadastre-se Grátis.")
+            st.info("Crie sua conta para salvar seus dados.")
             nome = st.text_input("Nome", key="cad_nome")
             mail = st.text_input("E-mail", key="cad_mail")
             whats = st.text_input("WhatsApp", key="cad_whats")
             pw = st.text_input("Senha", type="password", key="cad_pw")
-            if st.button("Criar Conta", key="btn_cad"):
-                ok, msg = registrar_usuario(nome, mail, pw, whats)
-                if ok: st.success(msg)
-                else: st.error(msg)
+            if st.button("Cadastrar", key="btn_cad"):
+                if len(pw) < 4: st.warning("Senha curta")
+                else:
+                    ok, msg = registrar_usuario(nome, mail, pw, whats)
+                    if ok: st.success(msg)
+                    else: st.error(msg)
+
+        # TAB 3: RECUPERAÇÃO
+        with tab3:
+            st.warning("Recuperação de Senha")
+            rec_email = st.text_input("Digite seu e-mail cadastrado", key="rec_mail")
+            if st.button("Solicitar Reset"):
+                st.info("✅ Solicitação enviada! Por segurança, entre em contato com o suporte (WhatsApp) para receber sua senha temporária.")
+                st.caption("Admin: Verifique se o e-mail existe na área administrativa.")
 
 # ==============================================================================
-# VIEW 2: SISTEMA
+# SISTEMA LOGADO
 # ==============================================================================
 def sistema_logado():
     user = st.session_state['user']
     plano = user['plano']
     
-    # Lista de menus baseada no plano
-    opcoes_menu = ["Dashboard (Mercado)", "Minha Carteira", "Mercado P2P", "Promoções"]
-    
-    # Se for ADMIN, adiciona opção extra
-    if plano == "Admin":
-        opcoes_menu.append("👑 Área Administrativa")
+    opcoes = ["Dashboard (Mercado)", "Minha Carteira", "Mercado P2P", "Promoções"]
+    if plano == "Admin": opcoes.append("👑 Gestão de Usuários")
 
     with st.sidebar:
-        st.title("✈️ Painel")
+        try: st.image("https://cdn-icons-png.flaticon.com/512/723/723955.png", width=80)
+        except: pass
         st.write(f"Olá, **{user['nome']}**")
-        
-        if plano == "Admin": st.success("👑 ADMIN MASTER")
-        elif plano == "Pro": st.success("⭐ ASSINANTE PRO")
-        else: st.info("🔹 CONTA FREE")
+        if plano == "Admin": st.success("👑 ADMIN")
+        elif plano == "Pro": st.success("⭐ PRO")
+        else: st.info("🔹 FREE")
         
         st.divider()
-        menu = st.radio("Navegação", opcoes_menu)
+        menu = st.radio("Menu", opcoes)
         st.divider()
         if st.button("Sair"): st.session_state['user'] = None; st.rerun()
 
     df_cotacoes = ler_dados_historico()
 
-    # --- 1. DASHBOARD ---
     if menu == "Dashboard (Mercado)":
         st.header("📊 Cotações de Hoje")
         if not df_cotacoes.empty:
@@ -214,20 +247,18 @@ def sistema_logado():
                 d = df_cotacoes[df_cotacoes['programa'].str.contains(p, case=False, na=False)]
                 with cols[i]:
                     if not d.empty:
-                        val = d.iloc[-1]['cpm']
-                        st.metric(p, f"R$ {val:.2f}")
+                        st.metric(p, f"R$ {d.iloc[-1]['cpm']:.2f}")
                         st.line_chart(d, x="data_hora", y="cpm")
                     else: st.metric(p, "--")
-        else: st.warning("Aguardando atualização do robô.")
+        else: st.warning("Aguardando robô.")
 
-    # --- 2. CARTEIRA ---
     elif menu == "Minha Carteira":
-        st.header("💼 Gestão de Carteira")
+        st.header("💼 Carteira")
         if plano == "Free": mostrar_paywall()
         else:
             with st.expander("➕ Adicionar"):
                 c1, c2, c3 = st.columns(3)
-                p = c1.selectbox("Prog", ["Latam", "Smiles", "Azul", "Livelo"])
+                p = c1.selectbox("Programa", ["Latam Pass", "Smiles", "Azul", "Livelo"])
                 q = c2.number_input("Qtd", 1000, step=1000)
                 v = c3.number_input("R$ Total", 0.0, step=10.0)
                 if st.button("Salvar"): adicionar_carteira(user['email'], p, q, v); st.rerun()
@@ -236,9 +267,8 @@ def sistema_logado():
                 st.dataframe(dfc)
                 rid = st.number_input("ID Remover", step=1)
                 if st.button("Remover"): remover_carteira(rid); st.rerun()
-            else: st.info("Carteira Vazia.")
+            else: st.info("Vazia.")
 
-    # --- 3. P2P ---
     elif menu == "Mercado P2P":
         st.header("📢 Radar P2P")
         if plano == "Free": mostrar_paywall()
@@ -250,9 +280,7 @@ def sistema_logado():
                 t = st.radio("Tipo", ["VENDA", "COMPRA"])
                 val = st.number_input("Valor", 15.0)
                 obs = st.text_input("Obs")
-                if st.form_submit_button("Salvar"):
-                    adicionar_p2p(g, p, t, val, obs)
-                    st.success("Salvo!"); time.sleep(0.5); st.rerun()
+                if st.form_submit_button("Salvar"): adicionar_p2p(g, p, t, val, obs); st.success("Salvo!"); time.sleep(0.5); st.rerun()
             try:
                 con = conectar_local()
                 dfp = pd.read_sql_query("SELECT * FROM mercado_p2p ORDER BY id DESC", con)
@@ -260,9 +288,8 @@ def sistema_logado():
                 if not dfp.empty: st.dataframe(dfp)
             except: pass
 
-    # --- 4. PROMOÇÕES ---
     elif menu == "Promoções":
-        st.header("🔥 Radar de Promoções")
+        st.header("🔥 Radar")
         if plano == "Free": mostrar_paywall()
         else:
             try:
@@ -272,51 +299,56 @@ def sistema_logado():
                 for _, r in dfp.iterrows(): st.markdown(f"[{r['titulo']}]({r['link']})")
             except: st.write("Nada ainda.")
 
-    # --- 5. ÁREA ADMIN (NOVA!) ---
-    elif menu == "👑 Área Administrativa":
-        st.header("Gestão de Usuários (CEO Mode)")
-        st.warning("⚠️ Cuidado: Alterações aqui afetam o acesso dos usuários.")
+    # --- ÁREA DE GESTÃO DE USUÁRIOS (SÓ ADMIN) ---
+    elif menu == "👑 Gestão de Usuários":
+        st.header("Gestão Completa de Clientes")
         
-        df_users = admin_listar_usuarios()
-        
+        df_users = admin_listar_todos()
         if not df_users.empty:
-            # Métricas
-            u_total = len(df_users)
-            u_pro = len(df_users[df_users['plano'] == 'Pro'])
-            u_free = len(df_users[df_users['plano'] == 'Free'])
+            # Seleção de Usuário
+            lista_emails = df_users['email'].tolist()
+            user_selecionado = st.selectbox("Selecione o Cliente para Editar", lista_emails)
             
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Total Usuários", u_total)
-            m2.metric("Assinantes PRO", u_pro)
-            m3.metric("Usuários Free", u_free)
+            # Pega dados atuais desse usuario
+            dados_user = df_users[df_users['email'] == user_selecionado].iloc[0]
             
             st.divider()
+            col_edit1, col_edit2 = st.columns(2)
             
-            # Tabela de Usuários
-            st.markdown("### Lista de Clientes")
-            st.dataframe(df_users)
-            
-            st.divider()
-            
-            # Ferramenta de Upgrade
-            st.markdown("### ⚡ Alterar Plano do Cliente")
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                target_email = st.selectbox("Selecione o Cliente", df_users['email'].unique())
-            with c2:
-                new_plan = st.selectbox("Novo Plano", ["Free", "Pro", "Bloqueado"])
-            with c3:
-                st.write("") # Espaço
-                st.write("") 
-                if st.button("💾 Atualizar Plano"):
-                    if admin_atualizar_plano(target_email, new_plan):
-                        st.success(f"Plano de {target_email} alterado para {new_plan}!")
-                        time.sleep(1)
-                        st.rerun()
+            with col_edit1:
+                st.subheader("📝 Dados Cadastrais")
+                with st.form("form_edit_user"):
+                    novo_nome = st.text_input("Nome", value=dados_user['nome'])
+                    novo_email = st.text_input("E-mail (Cuidado ao mudar)", value=dados_user['email'])
+                    novo_tel = st.text_input("Telefone", value=str(dados_user['telefone']) if dados_user['telefone'] else "")
+                    novo_plano = st.selectbox("Plano", ["Free", "Pro", "Admin"], index=["Free", "Pro", "Admin"].index(dados_user.get('plano', 'Free')))
+                    novo_status = st.selectbox("Status", ["Ativo", "Bloqueado"], index=0)
+                    
+                    if st.form_submit_button("💾 Salvar Alterações"):
+                        if admin_atualizar_dados(int(dados_user['id']), novo_nome, novo_email, novo_tel, novo_plano, novo_status):
+                            st.success("Dados atualizados!")
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error("Erro ao atualizar.")
+
+            with col_edit2:
+                st.subheader("🔑 Segurança")
+                st.warning("Reset de Senha")
+                nova_senha_admin = st.text_input("Nova Senha Temporária", placeholder="Ex: mudar123")
+                
+                if st.button("🔄 Resetar Senha do Cliente"):
+                    if len(nova_senha_admin) > 3:
+                        if admin_resetar_senha(int(dados_user['id']), nova_senha_admin):
+                            st.success(f"Senha de {user_selecionado} alterada com sucesso!")
+                        else:
+                            st.error("Erro ao resetar.")
                     else:
-                        st.error("Erro ao atualizar.")
-        else:
-            st.info("Nenhum usuário encontrado no Supabase.")
+                        st.warning("Digite uma senha válida.")
+            
+            st.divider()
+            st.markdown("### Lista Geral")
+            st.dataframe(df_users)
 
 # MAIN
 if st.session_state['user']: sistema_logado()
