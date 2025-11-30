@@ -1,154 +1,165 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
+import banco # Importamos o banco atualizado
 
-# --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Milhas Pro 2.0", page_icon="🚀", layout="wide")
-st.title("🚀 Centro de Comando de Milhas")
+# Configuração da página
+st.set_page_config(page_title="Milhas Pro 3.0 - Asset Management", page_icon="🏦", layout="wide")
+st.title("🏦 Gestão de Patrimônio em Milhas")
 
-# --- FUNÇÕES DE CARREGAMENTO ---
-def carregar_dados():
+# Garante que o banco está criado
+banco.iniciar_banco()
+
+# --- FUNÇÕES AUXILIARES ---
+def carregar_cotacoes():
     try:
         conexao = sqlite3.connect("milhas.db")
-        # Pega tudo, ordenado por data
         df = pd.read_sql_query("SELECT * FROM historico ORDER BY data_hora ASC", conexao)
         conexao.close()
-        
         if not df.empty:
             df['data_hora'] = pd.to_datetime(df['data_hora'])
-            # Garante que a coluna 'email' seja tratada como 'programa' (legado do codigo antigo)
-            if 'email' in df.columns:
-                df = df.rename(columns={'email': 'programa'})
+            if 'email' in df.columns: df = df.rename(columns={'email': 'programa'})
         return df
-    except:
-        return pd.DataFrame()
+    except: return pd.DataFrame()
 
-def carregar_promocoes():
-    try:
-        conexao = sqlite3.connect("milhas.db")
-        df = pd.read_sql_query("SELECT * FROM promocoes ORDER BY id DESC LIMIT 15", conexao)
-        conexao.close()
-        return df
-    except:
-        return pd.DataFrame()
-
-df = carregar_dados()
-df_promos = carregar_promocoes()
-
-# --- KPI PRINCIPAL: VISÃO DE MERCADO ---
-st.subheader("📊 Pulso do Mercado (Cotação 90 dias)")
-
-if not df.empty:
-    cols = st.columns(3)
-    programas = ["Latam Pass", "Smiles (Gol)", "TudoAzul"] # Nomes exatos do banco
+def pegar_preco_atual(programa, df_historico):
+    """Pega o preço mais recente de um programa especifico"""
+    if df_historico.empty: return 0.0
     
-    for i, prog in enumerate(programas):
-        # Filtra dados só desse programa
-        dados_prog = df[df['programa'].str.contains(prog.split()[0], case=False)]
+    # Filtra pelo nome (ex: Latam)
+    filtro = df_historico[df_historico['programa'].str.contains(programa.split()[0], case=False, na=False)]
+    if not filtro.empty:
+        return filtro.iloc[-1]['cpm']
+    return 0.0
+
+# --- CARREGAMENTO ---
+df_cotacoes = carregar_cotacoes()
+df_carteira = banco.ler_carteira()
+
+# --- MENU LATERAL DE NAVEGAÇÃO ---
+menu = st.sidebar.radio("Navegação", ["Minha Carteira (Patrimônio)", "Análise de Mercado", "Promoções"])
+
+# ==============================================================================
+# ABA 1: MINHA CARTEIRA (O NOVO PODER)
+# ==============================================================================
+if menu == "Minha Carteira (Patrimônio)":
+    st.header("💼 Seu Estoque de Milhas")
+    
+    # 1. Formulário para Adicionar Compras
+    with st.expander("➕ Registrar Nova Compra de Milhas", expanded=False):
+        c1, c2, c3 = st.columns(3)
+        prog_input = c1.selectbox("Programa", ["Latam Pass", "Smiles", "TudoAzul", "Livelo", "Esfera"])
+        qtd_input = c2.number_input("Quantidade de Milhas", min_value=1000, step=1000)
+        custo_input = c3.number_input("Quanto você pagou? (R$ Total)", min_value=0.0, step=10.0)
         
-        with cols[i]:
-            if not dados_prog.empty:
-                # Pega o último preço e o penúltimo para comparar
-                atual = dados_prog.iloc[-1]
-                valor_atual = atual['cpm']
-                
-                delta = 0
-                if len(dados_prog) > 1:
-                    anterior = dados_prog.iloc[-2]
-                    valor_anterior = anterior['cpm']
-                    delta = valor_atual - valor_anterior
-                
-                st.metric(
-                    label=prog,
-                    value=f"R$ {valor_atual:.2f}",
-                    delta=f"{delta:.2f}", # Mostra setinha verde ou vermelha
-                    delta_color="normal"
-                )
-                st.caption(f"Atualizado: {atual['data_hora'].strftime('%d/%m %H:%M')}")
-            else:
-                st.metric(label=prog, value="--", delta="Sem dados")
+        if st.button("💾 Salvar na Carteira"):
+            banco.adicionar_milhas(prog_input, qtd_input, custo_input)
+            st.success("Adicionado!")
+            st.rerun()
 
-st.divider()
+    st.divider()
 
-# --- ÁREA DE ESTRATÉGIA (SIMULADOR) ---
-col_sim, col_graf = st.columns([1, 2])
-
-with col_sim:
-    st.header("🧮 Simulador de Lucro")
-    
-    # Seletor de Estratégias Prontas
-    estrategia = st.selectbox(
-        "Escolha uma Estratégia Comum:",
-        ["Personalizada", "Livelo 50% Off", "Livelo 52% Off (Clube)", "Esfera 50% Off", "Compra Bonificada 100%"]
-    )
-    
-    # Preenche valores automaticamente baseado na escolha
-    val_compra = 70.00
-    desc = 0.0
-    
-    if estrategia == "Livelo 50% Off":
-        val_compra = 70.00
-        desc = 50.0
-    elif estrategia == "Livelo 52% Off (Clube)":
-        val_compra = 70.00
-        desc = 52.0
-    elif estrategia == "Esfera 50% Off":
-        val_compra = 70.00
-        desc = 50.0
-    
-    # Inputs Manuais
-    custo_base = st.number_input("Preço Base do Milheiro (R$)", value=val_compra, step=1.0)
-    desconto_compra = st.number_input("Desconto na Compra (%)", value=desc, step=1.0)
-    bonus_transf = st.number_input("Bônus de Transferência (%)", value=100.0, step=10.0)
-    
-    # Matemática
-    custo_pagou = custo_base * (1 - (desconto_compra/100))
-    fator_bonus = 1 + (bonus_transf / 100)
-    cpm_final = custo_pagou / fator_bonus
-    
-    st.info(f"💰 **Seu Custo CPM: R$ {cpm_final:.2f}**")
-    
-    # Comparativo com Venda Hoje (Pega a melhor venda entre os 3)
-    if not df.empty:
-        melhor_venda = df.iloc[-1]['cpm'] # Pega o ultimo registro geral (simplificado)
-        lucro = melhor_venda - cpm_final
-        margem = (lucro / cpm_final) * 100
+    # 2. Exibição da Carteira com Cotação em Tempo Real
+    if not df_carteira.empty:
+        # Vamos enriquecer a tabela com dados do mercado
+        patrimonio_total = 0
+        custo_total_carteira = 0
         
-        if margem > 10:
-            st.success(f"Lucro Potencial: {margem:.1f}% (Venda a R$ {melhor_venda:.2f})")
-        elif margem > 0:
-            st.warning(f"Lucro Baixo: {margem:.1f}%")
-        else:
-            st.error(f"Prejuízo: {margem:.1f}%")
-
-with col_graf:
-    st.subheader("📈 Tendência de Preços (Comparativo)")
-    if not df.empty:
-        # Gráfico colorido por programa
-        st.line_chart(df, x="data_hora", y="cpm", color="programa")
+        # Lista para montar a tabela visual
+        tabela_visual = []
+        
+        for index, row in df_carteira.iterrows():
+            prog = row['programa']
+            qtd = row['quantidade']
+            custo = row['custo_total']
+            cpm_pago = row['cpm_medio']
+            
+            # Busca quanto vale HOJE
+            preco_mercado = pegar_preco_atual(prog, df_cotacoes)
+            
+            # Cálculos Financeiros
+            valor_atual_venda = (qtd / 1000) * preco_mercado
+            lucro_prejuizo = valor_atual_venda - custo
+            margem = ((valor_atual_venda - custo) / custo) * 100 if custo > 0 else 0
+            
+            patrimonio_total += valor_atual_venda
+            custo_total_carteira += custo
+            
+            tabela_visual.append({
+                "ID": row['id'],
+                "Programa": prog,
+                "Milhas": f"{qtd:,.0f}",
+                "CPM Pago": f"R$ {cpm_pago:.2f}",
+                "CPM Venda (Hoje)": f"R$ {preco_mercado:.2f}",
+                "Valor de Venda": f"R$ {valor_atual_venda:.2f}",
+                "Lucro/Prejuízo": lucro_prejuizo, # Numérico para colorir depois
+                "Margem": f"{margem:.1f}%"
+            })
+            
+        df_visual = pd.DataFrame(tabela_visual)
+        
+        # KPIs do Topo
+        k1, k2, k3 = st.columns(3)
+        k1.metric("Patrimônio Total (Se vender hoje)", f"R$ {patrimonio_total:,.2f}")
+        k2.metric("Custo de Aquisição", f"R$ {custo_total_carteira:,.2f}")
+        
+        lucro_total = patrimonio_total - custo_total_carteira
+        k3.metric("Resultado Geral", f"R$ {lucro_total:,.2f}", delta=f"{(lucro_total/custo_total_carteira)*100:.1f}%" if custo_total_carteira else 0)
+        
+        st.divider()
+        st.subheader("Detalhamento por Lote")
+        
+        # Mostra tabela colorida
+        st.dataframe(
+            df_visual.style.applymap(lambda x: 'color: green' if x > 0 else 'color: red', subset=['Lucro/Prejuízo']),
+            use_container_width=True
+        )
+        
+        # Botão para deletar
+        st.caption("Para vender/remover um lote, veja o ID na tabela acima.")
+        id_del = st.number_input("ID para remover", min_value=0, step=1)
+        if st.button("🗑️ Remover Lote"):
+            banco.remover_item_carteira(id_del)
+            st.rerun()
+            
     else:
-        st.write("Aguardando dados...")
+        st.info("Sua carteira está vazia. Registre suas milhas acima para começar a gerenciar seu patrimônio.")
 
-# --- ABA DE PROMOÇÕES E DADOS ---
-st.divider()
-tab1, tab2 = st.tabs(["🔥 Radar de Promoções", "💾 Dados Brutos"])
+# ==============================================================================
+# ABA 2: ANÁLISE DE MERCADO (O QUE JÁ TINHA ANTES)
+# ==============================================================================
+elif menu == "Análise de Mercado":
+    st.header("📊 Pulso do Mercado (Cotação 90 dias)")
+    
+    # ... (Código simplificado da exibição de métricas que fizemos antes)
+    if not df_cotacoes.empty:
+        cols = st.columns(3)
+        programas = ["Latam", "Smiles", "Azul"]
+        for i, prog in enumerate(programas):
+            dados_prog = df_cotacoes[df_cotacoes['programa'].str.contains(prog, case=False, na=False)]
+            with cols[i]:
+                if not dados_prog.empty:
+                    atual = dados_prog.iloc[-1]['cpm']
+                    st.metric(prog, f"R$ {atual:.2f}")
+                    st.line_chart(dados_prog, x="data_hora", y="cpm")
+                else:
+                    st.metric(prog, "Sem dados")
 
-with tab1:
+# ==============================================================================
+# ABA 3: PROMOÇÕES
+# ==============================================================================
+elif menu == "Promoções":
+    st.header("🔥 Radar de Oportunidades")
+    
+    def carregar_promocoes():
+        try:
+            conexao = sqlite3.connect("milhas.db")
+            return pd.read_sql_query("SELECT * FROM promocoes ORDER BY id DESC LIMIT 15", conexao)
+        except: return pd.DataFrame()
+
+    df_promos = carregar_promocoes()
     if not df_promos.empty:
         for index, row in df_promos.iterrows():
-            st.markdown(f"**{row['data_hora'][5:10]}** | [{row['titulo']}]({row['link']}) _via {row['origem']}_")
+            st.markdown(f"**{row['data_hora'][5:10]}** | [{row['titulo']}]({row['link']})")
     else:
-        st.info("Nenhuma promoção recente detectada.")
-
-with tab2:
-    st.write("Histórico completo do banco de dados:")
-    st.dataframe(df.sort_values(by='data_hora', ascending=False), hide_index=True)
-    
-    # Botão de Download para Excel/CSV
-    csv = df.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="📥 Baixar Dados em CSV",
-        data=csv,
-        file_name='historico_milhas.csv',
-        mime='text/csv',
-    )
+        st.info("Nenhuma promoção recente.")
