@@ -29,6 +29,14 @@ jobs:
           playwright install chromium
           playwright install-deps # <--- ESSA É A LINHA QUE FALTAVA!
 
+          # ... (logo após instalar as bibliotecas)
+
+      - name: Rodar Monitor de Promoções
+        run: python monitor_promocoes.py
+        
+      - name: Rodar o Robô (Cotador)
+      # ... (continua igual)
+
       - name: Rodar o Robô
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
