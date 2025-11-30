@@ -6,10 +6,10 @@ import time
 import re
 from datetime import datetime
 
-# --- 1. CONFIGURAÇÃO INICIAL (Obrigatório ser a primeira linha) ---
+# --- 1. CONFIGURAÇÃO INICIAL ---
 st.set_page_config(
     page_title="MilhasPro System",
-    page_icon="🚀",
+    page_icon="✈️", # Ícone da aba do navegador
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -37,7 +37,6 @@ def conectar_local(): return sqlite3.connect(NOME_BANCO_LOCAL)
 def iniciar_banco():
     con = conectar_local()
     cur = con.cursor()
-    # Criação de tabelas
     cur.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
     cur.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
     cur.execute('CREATE TABLE IF NOT EXISTS carteira (id INTEGER PRIMARY KEY AUTOINCREMENT, usuario_email TEXT, data_compra TEXT, programa TEXT, quantidade INTEGER, custo_total REAL, cpm_medio REAL)')
@@ -152,7 +151,6 @@ def remover_carteira(id_item):
 
 def adicionar_p2p(g, p, t, v, o):
     con = conectar_local()
-    # Correção de sintaxe SQL
     sql = "INSERT INTO mercado_p2p (data_hora, grupo_nome, programa, tipo, valor, observacao) VALUES (?, ?, ?, ?, ?, ?)"
     con.execute(sql, (datetime.now().strftime("%Y-%m-%d %H:%M"), g, p, t, v, o))
     con.commit(); con.close()
@@ -186,9 +184,10 @@ if 'user' not in st.session_state: st.session_state['user'] = None
 def tela_login():
     c1, c2, c3 = st.columns([1, 1.5, 1])
     with c2:
-        try: st.image("https://cdn-icons-png.flaticon.com/512/1356/1356479.png", width=100)
-        except: pass
-        st.markdown("<h1 style='text-align: center;'>MilhasPro System</h1>", unsafe_allow_html=True)
+        # LOGO NOVA NO LOGIN
+        try: st.image("logo.png", width=200) # Usando arquivo local
+        except: st.header("MilhasPro") # Fallback se imagem falhar
+        
         tab1, tab2 = st.tabs(["ENTRAR", "CRIAR CONTA"])
         
         with tab1:
@@ -228,8 +227,10 @@ def sistema_logado():
     if plano == "Admin": opcoes.append("👑 Gestão de Usuários")
 
     with st.sidebar:
-        try: st.image("https://cdn-icons-png.flaticon.com/512/1356/1356479.png", width=80)
-        except: pass
+        # LOGO NOVA NO MENU
+        try: st.image("logo.png", width=180) # Usando arquivo local
+        except: st.header("MilhasPro")
+        
         st.write(f"Olá, **{user['nome']}**")
         if plano == "Admin": st.success("👑 ADMIN")
         elif plano == "Pro": st.success("⭐ PRO")
@@ -249,27 +250,21 @@ def sistema_logado():
             for i, p in enumerate(["Latam", "Smiles", "Azul"]):
                 d = df_cotacoes[df_cotacoes['programa'].str.contains(p, case=False, na=False)]
                 
-                # Previne erro de variável
                 val_hot = 0.0
-                if not d.empty:
-                    val_hot = d.iloc[-1]['cpm']
+                if not d.empty: val_hot = d.iloc[-1]['cpm']
                 
                 valor_p2p = pegar_ultimo_p2p(p)
                 
                 with cols[i]:
                     st.markdown(f"### {p}")
-                    if val_hot > 0:
-                        st.metric("Hotmilhas", f"R$ {val_hot:.2f}")
-                    else:
-                        st.metric("Hotmilhas", "--")
+                    if val_hot > 0: st.metric("Hotmilhas", f"R$ {val_hot:.2f}")
+                    else: st.metric("Hotmilhas", "--")
                     
                     if valor_p2p > 0:
-                        # Cálculo seguro do delta
                         delta = 0.0
                         if val_hot > 0: delta = valor_p2p - val_hot
                         st.metric("Grupos P2P", f"R$ {valor_p2p:.2f}", delta=f"{delta:.2f} vs Robô")
-                    else:
-                        st.caption("Sem dados P2P")
+                    else: st.caption("Sem dados P2P")
                         
                     if not d.empty: st.line_chart(d, x="data_hora", y="cpm")
         else: st.warning("Aguardando robô.")
@@ -292,14 +287,14 @@ def sistema_logado():
                 if st.button("Remover"): remover_carteira(rid); st.rerun()
             else: st.info("Vazia.")
 
-    # --- P2P (BLINDADO) ---
+    # --- MERCADO P2P ---
     elif menu == "Mercado P2P":
         st.header("📢 Radar P2P")
         
-        # Admin vê form, outros veem tabela ou bloqueio
+        # Só ADMIN posta ofertas
         if plano == "Admin":
             with st.form("p2p"):
-                st.markdown("### 👑 Inserir Oferta")
+                st.markdown("### 👑 Inserir Oferta (Admin)")
                 c1, c2 = st.columns(2)
                 g = c1.text_input("Grupo")
                 p = c2.selectbox("Prog", ["Latam", "Smiles", "Azul"])
@@ -309,13 +304,9 @@ def sistema_logado():
                 if st.form_submit_button("Publicar"):
                     adicionar_p2p(g, p, t, val, obs); st.success("Salvo!"); time.sleep(0.5); st.rerun()
         else:
-            if plano == "Free":
-                mostrar_paywall()
-                st.stop() # Para execução aqui se for free
-            else:
-                st.info("ℹ️ Dados verificados pela administração.")
+            if plano == "Free": mostrar_paywall(); st.stop()
+            else: st.info("ℹ️ Dados verificados pela administração.")
 
-        # Tabela Visível para Admin e Pro
         try:
             con = conectar_local()
             dfp = pd.read_sql_query("SELECT * FROM mercado_p2p ORDER BY id DESC", con)
