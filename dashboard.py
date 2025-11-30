@@ -171,9 +171,15 @@ def pegar_ultimo_p2p(programa):
 # --- INICIALIZA ---
 iniciar_banco()
 
-# --- ESTILIZAÇÃO CSS (CORRIGIDA) ---
+# --- ESTILIZAÇÃO CSS (DESIGN AZUL + CENTRALIZAÇÃO REAL) ---
 st.markdown("""
 <style>
+    /* Remove espaço branco do topo */
+    .block-container {
+        padding-top: 1rem !important;
+        padding-bottom: 1rem !important;
+    }
+    
     /* Botões Azuis da Logo (#0E436B) */
     div.stButton > button {
         width: 100%;
@@ -189,11 +195,19 @@ st.markdown("""
         color: white;
     }
     
-    /* Centralizar Imagens automaticamente */
-    div[data-testid="stImage"] > img {
-        display: block;
-        margin-left: auto;
-        margin-right: auto;
+    /* FORÇA A CENTRALIZAÇÃO DE TODAS AS IMAGENS */
+    div[data-testid="stImage"] {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+    }
+    
+    /* Estilo dos Cards */
+    .metric-card {
+        background: #f0f2f6; 
+        padding: 15px; 
+        border-radius: 8px;
+        box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
     }
 </style>
 """, unsafe_allow_html=True)
@@ -209,17 +223,15 @@ if 'user' not in st.session_state: st.session_state['user'] = None
 # TELA DE LOGIN
 # ==============================================================================
 def tela_login():
-    # Colunas: 1 (Espaço) | 2 (Conteúdo) | 1 (Espaço)
-    # Isso centraliza o conteúdo de forma limpa
+    # Colunas: 1 | 2 (Formulário) | 1 -> Centraliza bem
     c1, c2, c3 = st.columns([1, 2, 1])
     
     with c2:
-        # LOGO (Tamanho ideal 250px)
-        st.image(LOGO_URL, width=250)
+        # LOGO GRANDE (300px)
+        # O CSS 'justify-content: center' vai garantir que fique no meio
+        st.image(LOGO_URL, width=300)
         
-        # Título simples e elegante
         st.markdown("<h3 style='text-align: center; color: #0E436B;'>Acesso ao Sistema</h3>", unsafe_allow_html=True)
-        st.write("") # Espaço extra
         
         tab1, tab2 = st.tabs(["ENTRAR", "CRIAR CONTA"])
         
@@ -239,7 +251,7 @@ def tela_login():
                 else: st.error("Acesso negado.")
         
         with tab2:
-            st.info("Requisitos: Mínimo 8 caracteres, Maiúscula, Minúscula, Número e Especial.")
+            st.info("Senha forte obrigatória: Maiúscula, Minúscula, Número e Especial (@#$%).")
             nome = st.text_input("Nome", key="cad_nome")
             mail = st.text_input("E-mail", key="cad_mail")
             whats = st.text_input("WhatsApp", key="cad_whats")
@@ -260,7 +272,7 @@ def sistema_logado():
     if plano == "Admin": opcoes.append("👑 Gestão de Usuários")
 
     with st.sidebar:
-        # Logo no Menu
+        # LOGO MENOR NO MENU (200px)
         st.image(LOGO_URL, width=200)
         
         st.markdown(f"<div style='text-align: center;'>Olá, <b>{user['nome'].split()[0]}</b></div>", unsafe_allow_html=True)
