@@ -57,3 +57,26 @@ def salvar_promocao(titulo, link, origem):
     
     conexao.commit()
     conexao.close()
+
+def pegar_ultimo_preco(programa):
+    """Retorna o último CPM salvo para comparar"""
+    try:
+        conexao = sqlite3.connect(NOME_BANCO)
+        cursor = conexao.cursor()
+        
+        # Pega o último registro desse programa
+        # Usamos 'email' porque no código legado o nome do programa é salvo nessa coluna
+        cursor.execute("""
+            SELECT cpm FROM historico 
+            WHERE email LIKE ? 
+            ORDER BY id DESC LIMIT 1
+        """, (f"%{programa}%",))
+        
+        resultado = cursor.fetchone()
+        conexao.close()
+        
+        if resultado:
+            return resultado[0]
+        return 0.0
+    except:
+        return 0.0
