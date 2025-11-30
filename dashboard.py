@@ -1,18 +1,3 @@
-O erro `SyntaxError` na linha 102 aconteceu porque houve uma **quebra de linha indevida** no código. O Python não aceita que uma linha termine com um ponto `.` solto, a menos que esteja protegido por parênteses.
-
-Provavelmente, na hora de copiar ou colar, o comando ficou dividido.
-
-Vou te passar o código **100% corrigido e em um único bloco**. Eu ajustei as linhas que dão erro para ficarem em uma linha só, evitando esse problema de sintaxe.
-
-### Solução Definitiva (`dashboard.py`)
-
-1.  Vá no **GitHub**.
-2.  Edite `dashboard.py`.
-3.  **Apague tudo** e cole este código.
-
-<!-- end list -->
-
-```python
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -77,17 +62,13 @@ def registrar_usuario(nome, email, senha, telefone):
     sb = get_supabase()
     if sb:
         try:
-            # Verifica e-mail
             res = sb.table("usuarios").select("*").eq("email", email).execute()
             if len(res.data) > 0: return False, "E-mail já existe."
-            
-            # Insere usuário
             dados = {"email": email, "nome": nome, "senha_hash": criar_hash(senha), "telefone": telefone, "plano": "Free", "status": "Ativo"}
             sb.table("usuarios").insert(dados).execute()
             return True, "Conta criada! Faça login."
         except Exception as e: return False, f"Erro: {e}"
     
-    # Fallback Local
     try:
         con = conectar_local()
         con.execute("INSERT INTO usuarios (email, nome, senha_hash) VALUES (?, ?, ?)", (email, nome, criar_hash(senha)))
@@ -98,18 +79,14 @@ def registrar_usuario(nome, email, senha, telefone):
 def autenticar_usuario(email, senha):
     h = criar_hash(senha)
     sb = get_supabase()
-    
-    # Tenta Nuvem
     if sb:
         try:
-            # ESTA LINHA FOI CORRIGIDA (TUDO EM UMA LINHA SO)
             res = sb.table("usuarios").select("*").eq("email", email).eq("senha_hash", h).execute()
             if len(res.data) > 0:
                 u = res.data[0]
                 return {"nome": u['nome'], "plano": u.get('plano', 'Free'), "email": email}
         except: pass
     
-    # Tenta Local
     con = conectar_local()
     res = con.execute("SELECT nome FROM usuarios WHERE email = ? AND senha_hash = ?", (email, h)).fetchone()
     con.close()
@@ -353,4 +330,3 @@ def sistema_logado():
 # MAIN
 if st.session_state['user']: sistema_logado()
 else: tela_login()
-```
