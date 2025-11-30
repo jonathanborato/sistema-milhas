@@ -14,7 +14,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# LINK DA LOGO
 LOGO_URL = "https://raw.githubusercontent.com/jonathanborato/sistema-milhas/main/logo.png"
 
 # --- 2. CONFIGURAÇÃO SUPABASE ---
@@ -172,16 +171,10 @@ def pegar_ultimo_p2p(programa):
 # --- INICIALIZA ---
 iniciar_banco()
 
-# --- ESTILIZAÇÃO CSS AVANÇADA ---
+# --- ESTILIZAÇÃO CSS (CORRIGIDA) ---
 st.markdown("""
 <style>
-    /* Remove espaço branco do topo */
-    .block-container {
-        padding-top: 1rem !important;
-        padding-bottom: 1rem !important;
-    }
-    
-    /* Botões Azuis (#0E436B) */
+    /* Botões Azuis da Logo (#0E436B) */
     div.stButton > button {
         width: 100%;
         background-color: #0E436B;
@@ -196,19 +189,11 @@ st.markdown("""
         color: white;
     }
     
-    /* Centralizar Imagens */
-    [data-testid="stImage"] {
+    /* Centralizar Imagens automaticamente */
+    div[data-testid="stImage"] > img {
         display: block;
         margin-left: auto;
         margin-right: auto;
-    }
-    
-    /* Ajuste fino da Sidebar para subir o texto */
-    [data-testid="stSidebar"] .block-container {
-        padding-top: 0rem;
-    }
-    div[data-testid="stSidebarUserContent"] {
-        padding-top: 0px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -224,15 +209,17 @@ if 'user' not in st.session_state: st.session_state['user'] = None
 # TELA DE LOGIN
 # ==============================================================================
 def tela_login():
-    # Coluna do meio bem larga (5) para a logo ficar grande
-    c1, c2, c3 = st.columns([1, 5, 1])
+    # Colunas: 1 (Espaço) | 2 (Conteúdo) | 1 (Espaço)
+    # Isso centraliza o conteúdo de forma limpa
+    c1, c2, c3 = st.columns([1, 2, 1])
     
     with c2:
-        # LOGO GIGANTE
-        st.image(LOGO_URL, use_column_width=True)
+        # LOGO (Tamanho ideal 250px)
+        st.image(LOGO_URL, width=250)
         
-        # Margem negativa para aproximar o título da logo
-        st.markdown("<h3 style='text-align: center; color: #0E436B; margin-top: -30px; margin-bottom: 20px;'>Acesso ao Sistema</h3>", unsafe_allow_html=True)
+        # Título simples e elegante
+        st.markdown("<h3 style='text-align: center; color: #0E436B;'>Acesso ao Sistema</h3>", unsafe_allow_html=True)
+        st.write("") # Espaço extra
         
         tab1, tab2 = st.tabs(["ENTRAR", "CRIAR CONTA"])
         
@@ -252,7 +239,7 @@ def tela_login():
                 else: st.error("Acesso negado.")
         
         with tab2:
-            st.info("Senha forte obrigatória: Maiúscula, Minúscula, Número e Especial (@#$%).")
+            st.info("Requisitos: Mínimo 8 caracteres, Maiúscula, Minúscula, Número e Especial.")
             nome = st.text_input("Nome", key="cad_nome")
             mail = st.text_input("E-mail", key="cad_mail")
             whats = st.text_input("WhatsApp", key="cad_whats")
@@ -273,15 +260,10 @@ def sistema_logado():
     if plano == "Admin": opcoes.append("👑 Gestão de Usuários")
 
     with st.sidebar:
-        # LOGO GRANDE NO MENU
-        st.image(LOGO_URL, use_column_width=True)
+        # Logo no Menu
+        st.image(LOGO_URL, width=200)
         
-        # Margem negativa forte (-40px) para colar o texto na logo
-        st.markdown(f"""
-            <div style='text-align: center; margin-top: -20px; color: #444;'>
-                Olá, <b>{user['nome'].split()[0]}</b>
-            </div>
-            """, unsafe_allow_html=True)
+        st.markdown(f"<div style='text-align: center;'>Olá, <b>{user['nome'].split()[0]}</b></div>", unsafe_allow_html=True)
         
         if plano == "Admin": st.success("👑 ADMIN")
         elif plano == "Pro": st.success("⭐ PRO")
