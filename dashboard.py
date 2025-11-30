@@ -3,6 +3,7 @@ import pandas as pd
 import sqlite3
 import hashlib
 import time
+import re # Importante para verificar a senha forte
 from datetime import datetime
 
 # --- 1. CONFIGURAÇÃO INICIAL ---
@@ -28,11 +29,10 @@ def get_supabase():
         return create_client(url, key)
     except: return None
 
-# --- 3. BANCO LOCAL (DADOS DO ROBÔ) ---
+# --- 3. BANCO LOCAL ---
 NOME_BANCO_LOCAL = "milhas.db"
 
-def conectar_local():
-    return sqlite3.connect(NOME_BANCO_LOCAL)
+def conectar_local(): return sqlite3.connect(NOME_BANCO_LOCAL)
 
 def iniciar_banco():
     con = conectar_local()
@@ -41,29 +41,35 @@ def iniciar_banco():
     cur.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
     cur.execute('CREATE TABLE IF NOT EXISTS carteira (id INTEGER PRIMARY KEY AUTOINCREMENT, usuario_email TEXT, data_compra TEXT, programa TEXT, quantidade INTEGER, custo_total REAL, cpm_medio REAL)')
     cur.execute('CREATE TABLE IF NOT EXISTS mercado_p2p (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, grupo_nome TEXT, programa TEXT, tipo TEXT, valor REAL, observacao TEXT)')
-    # Fallback local
     cur.execute('CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, nome TEXT, senha_hash TEXT, data_cadastro TEXT)')
-    con.commit()
-    con.close()
+    con.commit(); con.close()
 
-def criar_hash(senha):
-    return hashlib.sha256(senha.encode()).hexdigest()
+def criar_hash(senha): return hashlib.sha256(senha.encode()).hexdigest()
+
+# --- NOVO: VALIDADOR DE SENHA FORTE ---
+def validar_senha_forte(senha):
+    if len(senha) < 8: return False, "A senha deve ter no mínimo 8 caracteres."
+    if not re.search(r"[a-z]", senha): return False, "A senha precisa ter letras minúsculas."
+    if not re.search(r"[A-Z]", senha): return False, "A senha precisa ter letras maiúsculas."
+    if not re.search(r"[0-9]", senha): return False, "A senha precisa ter números."
+    return True, ""
 
 # --- 4. FUNÇÕES DE USUÁRIO & ADMIN ---
-
 def registrar_usuario(nome, email, senha, telefone):
+    # Valida senha antes de tentar
+    valida, msg = validar_senha_forte(senha)
+    if not valida: return False, msg
+
     sb = get_supabase()
     if sb:
         try:
             res = sb.table("usuarios").select("*").eq("email", email).execute()
             if len(res.data) > 0: return False, "E-mail já existe."
-            
             dados = {"email": email, "nome": nome, "senha_hash": criar_hash(senha), "telefone": telefone, "plano": "Free", "status": "Ativo"}
             sb.table("usuarios").insert(dados).execute()
             return True, "Conta criada! Faça login."
         except Exception as e: return False, f"Erro: {e}"
     
-    # Fallback Local
     try:
         con = conectar_local()
         con.execute("INSERT INTO usuarios (email, nome, senha_hash) VALUES (?, ?, ?)", (email, nome, criar_hash(senha)))
@@ -82,14 +88,12 @@ def autenticar_usuario(email, senha):
                 return {"nome": u['nome'], "plano": u.get('plano', 'Free'), "email": email}
         except: pass
     
-    # Fallback
     con = conectar_local()
     res = con.execute("SELECT nome FROM usuarios WHERE email = ? AND senha_hash = ?", (email, h)).fetchone()
     con.close()
     if res: return {"nome": res[0], "plano": "Local", "email": email}
     return None
 
-# --- FUNÇÕES DE ADMINISTRAÇÃO AVANÇADA ---
 def admin_listar_todos():
     sb = get_supabase()
     if sb:
@@ -113,6 +117,7 @@ def admin_resetar_senha(id_user, nova_senha_texto):
     sb = get_supabase()
     if sb:
         try:
+            # Ao resetar pelo admin, não exigimos complexidade, pois é temporária
             novo_hash = criar_hash(nova_senha_texto)
             sb.table("usuarios").update({"senha_hash": novo_hash}).eq("id", id_user).execute()
             return True
@@ -155,7 +160,6 @@ def adicionar_p2p(g, p, t, v, o):
 # --- INICIALIZA ---
 iniciar_banco()
 
-# --- CSS E COMPONENTES ---
 st.markdown("""<style>.stButton>button {width: 100%;} .metric-card {background: #f0f2f6; padding: 15px; border-radius: 8px;}</style>""", unsafe_allow_html=True)
 
 def mostrar_paywall():
@@ -166,16 +170,17 @@ def mostrar_paywall():
 if 'user' not in st.session_state: st.session_state['user'] = None
 
 # ==============================================================================
-# TELA DE LOGIN / CADASTRO / RECUPERAÇÃO
+# TELA DE LOGIN / CADASTRO
 # ==============================================================================
 def tela_login():
     c1, c2, c3 = st.columns([1, 1.5, 1])
     with c2:
-        st.markdown("<h1 style='text-align: center;'>✈️ MilhasPro</h1>", unsafe_allow_html=True)
+        # AQUI ESTÁ O AVIÃO DE VOLTA! ✈️
+        st.image("https://cdn-icons-png.flaticon.com/512/723/723955.png", width=80)
+        st.markdown("<h1 style='text-align: center;'>MilhasPro System</h1>", unsafe_allow_html=True)
         
         tab1, tab2, tab3 = st.tabs(["ENTRAR", "CRIAR CONTA", "ESQUECI A SENHA"])
         
-        # TAB 1: LOGIN
         with tab1:
             email = st.text_input("E-mail", key="log_email")
             senha = st.text_input("Senha", type="password", key="log_pass")
@@ -192,27 +197,23 @@ def tela_login():
                     st.success(f"Olá, {user['nome']}!"); time.sleep(0.5); st.rerun()
                 else: st.error("Acesso negado.")
         
-        # TAB 2: CADASTRO
         with tab2:
-            st.info("Crie sua conta para salvar seus dados.")
+            st.info("Segurança: Use letra maiúscula, minúscula e número.")
             nome = st.text_input("Nome", key="cad_nome")
             mail = st.text_input("E-mail", key="cad_mail")
             whats = st.text_input("WhatsApp", key="cad_whats")
-            pw = st.text_input("Senha", type="password", key="cad_pw")
+            pw = st.text_input("Senha", type="password", key="cad_pw", help="Mínimo 8 caracteres, letras e números.")
+            
             if st.button("Cadastrar", key="btn_cad"):
-                if len(pw) < 4: st.warning("Senha curta")
-                else:
-                    ok, msg = registrar_usuario(nome, mail, pw, whats)
-                    if ok: st.success(msg)
-                    else: st.error(msg)
+                ok, msg = registrar_usuario(nome, mail, pw, whats)
+                if ok: st.success(msg)
+                else: st.error(msg)
 
-        # TAB 3: RECUPERAÇÃO
         with tab3:
-            st.warning("Recuperação de Senha")
-            rec_email = st.text_input("Digite seu e-mail cadastrado", key="rec_mail")
+            st.warning("Recuperação")
+            rec_email = st.text_input("E-mail cadastrado", key="rec_mail")
             if st.button("Solicitar Reset"):
-                st.info("✅ Solicitação enviada! Por segurança, entre em contato com o suporte (WhatsApp) para receber sua senha temporária.")
-                st.caption("Admin: Verifique se o e-mail existe na área administrativa.")
+                st.info("✅ Solicitação enviada! Contate o suporte.")
 
 # ==============================================================================
 # SISTEMA LOGADO
@@ -225,8 +226,9 @@ def sistema_logado():
     if plano == "Admin": opcoes.append("👑 Gestão de Usuários")
 
     with st.sidebar:
-        try: st.image("https://cdn-icons-png.flaticon.com/512/723/723955.png", width=80)
-        except: pass
+        # AQUI ESTÁ O AVIÃO DE VOLTA NA BARRA LATERAL! ✈️
+        st.image("https://cdn-icons-png.flaticon.com/512/723/723955.png", width=80)
+        
         st.write(f"Olá, **{user['nome']}**")
         if plano == "Admin": st.success("👑 ADMIN")
         elif plano == "Pro": st.success("⭐ PRO")
@@ -299,57 +301,30 @@ def sistema_logado():
                 for _, r in dfp.iterrows(): st.markdown(f"[{r['titulo']}]({r['link']})")
             except: st.write("Nada ainda.")
 
-    # --- ÁREA DE GESTÃO DE USUÁRIOS (SÓ ADMIN) ---
     elif menu == "👑 Gestão de Usuários":
-        st.header("Gestão Completa de Clientes")
-        
+        st.header("Gestão de Clientes")
         df_users = admin_listar_todos()
         if not df_users.empty:
-            # Seleção de Usuário
             lista_emails = df_users['email'].tolist()
-            user_selecionado = st.selectbox("Selecione o Cliente para Editar", lista_emails)
-            
-            # Pega dados atuais desse usuario
+            user_selecionado = st.selectbox("Editar Cliente", lista_emails)
             dados_user = df_users[df_users['email'] == user_selecionado].iloc[0]
-            
             st.divider()
             col_edit1, col_edit2 = st.columns(2)
-            
             with col_edit1:
-                st.subheader("📝 Dados Cadastrais")
-                with st.form("form_edit_user"):
-                    novo_nome = st.text_input("Nome", value=dados_user['nome'])
-                    novo_email = st.text_input("E-mail (Cuidado ao mudar)", value=dados_user['email'])
-                    novo_tel = st.text_input("Telefone", value=str(dados_user['telefone']) if dados_user['telefone'] else "")
-                    novo_plano = st.selectbox("Plano", ["Free", "Pro", "Admin"], index=["Free", "Pro", "Admin"].index(dados_user.get('plano', 'Free')))
-                    novo_status = st.selectbox("Status", ["Ativo", "Bloqueado"], index=0)
-                    
-                    if st.form_submit_button("💾 Salvar Alterações"):
-                        if admin_atualizar_dados(int(dados_user['id']), novo_nome, novo_email, novo_tel, novo_plano, novo_status):
-                            st.success("Dados atualizados!")
-                            time.sleep(1)
-                            st.rerun()
-                        else:
-                            st.error("Erro ao atualizar.")
-
+                with st.form("form_edit"):
+                    n_nm = st.text_input("Nome", value=dados_user['nome'])
+                    n_em = st.text_input("E-mail", value=dados_user['email'])
+                    n_tl = st.text_input("Tel", value=str(dados_user['telefone']) if dados_user['telefone'] else "")
+                    n_pl = st.selectbox("Plano", ["Free", "Pro", "Admin"], index=["Free", "Pro", "Admin"].index(dados_user.get('plano', 'Free')))
+                    n_st = st.selectbox("Status", ["Ativo", "Bloqueado"], index=0)
+                    if st.form_submit_button("💾 Salvar"):
+                        if admin_atualizar_dados(int(dados_user['id']), n_nm, n_em, n_tl, n_pl, n_st):
+                            st.success("Atualizado!"); time.sleep(1); st.rerun()
             with col_edit2:
-                st.subheader("🔑 Segurança")
-                st.warning("Reset de Senha")
-                nova_senha_admin = st.text_input("Nova Senha Temporária", placeholder="Ex: mudar123")
-                
-                if st.button("🔄 Resetar Senha do Cliente"):
-                    if len(nova_senha_admin) > 3:
-                        if admin_resetar_senha(int(dados_user['id']), nova_senha_admin):
-                            st.success(f"Senha de {user_selecionado} alterada com sucesso!")
-                        else:
-                            st.error("Erro ao resetar.")
-                    else:
-                        st.warning("Digite uma senha válida.")
-            
-            st.divider()
-            st.markdown("### Lista Geral")
-            st.dataframe(df_users)
-
-# MAIN
-if st.session_state['user']: sistema_logado()
-else: tela_login()
+                st.warning("Segurança")
+                n_pw = st.text_input("Resetar Senha", placeholder="Nova senha...")
+                if st.button("🔄 Confirmar Reset"):
+                    if len(n_pw)>3:
+                        if admin_resetar_senha(int(dados_user['id']), n_pw): st.success("Senha alterada!")
+                    else: st.error("Senha curta.")
+            st.divider
