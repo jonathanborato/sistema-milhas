@@ -171,7 +171,7 @@ def pegar_ultimo_p2p(programa):
 # --- INICIALIZA ---
 iniciar_banco()
 
-# --- ESTILIZAÇÃO CSS (DESIGN AZUL + CENTRALIZAÇÃO REAL) ---
+# --- ESTILIZAÇÃO CSS (CENTRALIZAÇÃO REFORÇADA) ---
 st.markdown("""
 <style>
     /* Remove espaço branco do topo */
@@ -195,19 +195,12 @@ st.markdown("""
         color: white;
     }
     
-    /* FORÇA A CENTRALIZAÇÃO DE TODAS AS IMAGENS */
+    /* FORÇA A CENTRALIZAÇÃO DE TODAS AS IMAGENS (FLEXBOX) */
     div[data-testid="stImage"] {
         display: flex;
         justify-content: center;
         align-items: center;
-    }
-    
-    /* Estilo dos Cards */
-    .metric-card {
-        background: #f0f2f6; 
-        padding: 15px; 
-        border-radius: 8px;
-        box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+        width: 100%;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -223,15 +216,15 @@ if 'user' not in st.session_state: st.session_state['user'] = None
 # TELA DE LOGIN
 # ==============================================================================
 def tela_login():
-    # Colunas: 1 | 2 (Formulário) | 1 -> Centraliza bem
+    # Colunas balanceadas: 1 | 2 (Conteúdo) | 1
     c1, c2, c3 = st.columns([1, 2, 1])
     
     with c2:
-        # LOGO GRANDE (300px)
-        # O CSS 'justify-content: center' vai garantir que fique no meio
+        # LOGO (O CSS Flexbox vai garantir que ela fique no centro)
         st.image(LOGO_URL, width=300)
         
-        st.markdown("<h3 style='text-align: center; color: #0E436B;'>Acesso ao Sistema</h3>", unsafe_allow_html=True)
+        # Título com margem negativa MAIOR (-50px) para colar na logo
+        st.markdown("<h3 style='text-align: center; color: #0E436B; margin-top: -50px; margin-bottom: 20px;'>Acesso ao Sistema</h3>", unsafe_allow_html=True)
         
         tab1, tab2 = st.tabs(["ENTRAR", "CRIAR CONTA"])
         
@@ -251,7 +244,7 @@ def tela_login():
                 else: st.error("Acesso negado.")
         
         with tab2:
-            st.info("Senha forte obrigatória: Maiúscula, Minúscula, Número e Especial (@#$%).")
+            st.info("Requisitos: Mínimo 8 caracteres, Maiúscula, Minúscula, Número e Especial.")
             nome = st.text_input("Nome", key="cad_nome")
             mail = st.text_input("E-mail", key="cad_mail")
             whats = st.text_input("WhatsApp", key="cad_whats")
@@ -272,10 +265,11 @@ def sistema_logado():
     if plano == "Admin": opcoes.append("👑 Gestão de Usuários")
 
     with st.sidebar:
-        # LOGO MENOR NO MENU (200px)
+        # Logo no Menu (O CSS também centraliza ela aqui)
         st.image(LOGO_URL, width=200)
         
-        st.markdown(f"<div style='text-align: center;'>Olá, <b>{user['nome'].split()[0]}</b></div>", unsafe_allow_html=True)
+        # Texto de boas-vindas próximo da logo
+        st.markdown(f"<div style='text-align: center; margin-top: -20px;'>Olá, <b>{user['nome'].split()[0]}</b></div>", unsafe_allow_html=True)
         
         if plano == "Admin": st.success("👑 ADMIN")
         elif plano == "Pro": st.success("⭐ PRO")
