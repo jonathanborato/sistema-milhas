@@ -3,7 +3,7 @@ import pandas as pd
 import sqlite3
 import hashlib
 import time
-import reit
+import re
 from datetime import datetime
 
 # --- 1. CONFIGURAÇÃO INICIAL ---
@@ -46,7 +46,7 @@ def iniciar_banco():
 
 def criar_hash(senha): return hashlib.sha256(senha.encode()).hexdigest()
 
-# --- NOVO: VALIDADOR DE SENHA FORTE ---
+# --- VALIDADOR DE SENHA ---
 def validar_senha_forte(senha):
     if len(senha) < 8: return False, "A senha deve ter no mínimo 8 caracteres."
     if not re.search(r"[a-z]", senha): return False, "A senha precisa ter letras minúsculas."
@@ -56,7 +56,6 @@ def validar_senha_forte(senha):
 
 # --- 4. FUNÇÕES DE USUÁRIO & ADMIN ---
 def registrar_usuario(nome, email, senha, telefone):
-    # Valida senha antes de tentar
     valida, msg = validar_senha_forte(senha)
     if not valida: return False, msg
 
@@ -117,7 +116,6 @@ def admin_resetar_senha(id_user, nova_senha_texto):
     sb = get_supabase()
     if sb:
         try:
-            # Ao resetar pelo admin, não exigimos complexidade
             novo_hash = criar_hash(nova_senha_texto)
             sb.table("usuarios").update({"senha_hash": novo_hash}).eq("id", id_user).execute()
             return True
@@ -171,116 +169,3 @@ if 'user' not in st.session_state: st.session_state['user'] = None
 
 # ==============================================================================
 # TELA DE LOGIN / CADASTRO
-# ==============================================================================
-def tela_login():
-    c1, c2, c3 = st.columns([1, 1.5, 1])
-    with c2:
-        st.image("https://cdn-icons-png.flaticon.com/512/723/723955.png", width=80)
-        st.markdown("<h1 style='text-align: center;'>MilhasPro System</h1>", unsafe_allow_html=True)
-        
-        tab1, tab2, tab3 = st.tabs(["ENTRAR", "CRIAR CONTA", "ESQUECI A SENHA"])
-        
-        with tab1:
-            email = st.text_input("E-mail", key="log_email")
-            senha = st.text_input("Senha", type="password", key="log_pass")
-            if st.button("Acessar", type="primary", key="btn_log"):
-                try:
-                    if email == st.secrets["admin"]["email"] and senha == st.secrets["admin"]["senha"]:
-                        st.session_state['user'] = {"nome": st.secrets["admin"]["nome"], "plano": "Admin", "email": email}
-                        st.rerun()
-                except: pass
-                
-                user = autenticar_usuario(email, senha)
-                if user:
-                    st.session_state['user'] = user
-                    st.success(f"Olá, {user['nome']}!"); time.sleep(0.5); st.rerun()
-                else: st.error("Acesso negado.")
-        
-        with tab2:
-            st.info("Segurança: Use letra maiúscula, minúscula e número.")
-            nome = st.text_input("Nome", key="cad_nome")
-            mail = st.text_input("E-mail", key="cad_mail")
-            whats = st.text_input("WhatsApp", key="cad_whats")
-            pw = st.text_input("Senha", type="password", key="cad_pw", help="Mínimo 8 caracteres, letras e números.")
-            
-            if st.button("Cadastrar", key="btn_cad"):
-                ok, msg = registrar_usuario(nome, mail, pw, whats)
-                if ok: st.success(msg)
-                else: st.error(msg)
-
-        with tab3:
-            st.warning("Recuperação")
-            rec_email = st.text_input("E-mail cadastrado", key="rec_mail")
-            if st.button("Solicitar Reset"):
-                st.info("✅ Solicitação enviada! Contate o suporte.")
-
-# ==============================================================================
-# SISTEMA LOGADO
-# ==============================================================================
-def sistema_logado():
-    user = st.session_state['user']
-    plano = user['plano']
-    
-    opcoes = ["Dashboard (Mercado)", "Minha Carteira", "Mercado P2P", "Promoções"]
-    if plano == "Admin": opcoes.append("👑 Gestão de Usuários")
-
-    with st.sidebar:
-        st.image("https://cdn-icons-png.flaticon.com/512/723/723955.png", width=80)
-        
-        st.write(f"Olá, **{user['nome']}**")
-        if plano == "Admin": st.success("👑 ADMIN")
-        elif plano == "Pro": st.success("⭐ PRO")
-        else: st.info("🔹 FREE")
-        
-        st.divider()
-        menu = st.radio("Menu", opcoes)
-        st.divider()
-        if st.button("Sair"): st.session_state['user'] = None; st.rerun()
-
-    df_cotacoes = ler_dados_historico()
-
-    if menu == "Dashboard (Mercado)":
-        st.header("📊 Cotações de Hoje")
-        if not df_cotacoes.empty:
-            cols = st.columns(3)
-            for i, p in enumerate(["Latam", "Smiles", "Azul"]):
-                d = df_cotacoes[df_cotacoes['programa'].str.contains(p, case=False, na=False)]
-                with cols[i]:
-                    if not d.empty:
-                        st.metric(p, f"R$ {d.iloc[-1]['cpm']:.2f}")
-                        st.line_chart(d, x="data_hora", y="cpm")
-                    else: st.metric(p, "--")
-        else: st.warning("Aguardando robô.")
-
-    elif menu == "Minha Carteira":
-        st.header("💼 Carteira")
-        if plano == "Free": mostrar_paywall()
-        else:
-            with st.expander("➕ Adicionar"):
-                c1, c2, c3 = st.columns(3)
-                p = c1.selectbox("Programa", ["Latam Pass", "Smiles", "Azul", "Livelo"])
-                q = c2.number_input("Qtd", 1000, step=1000)
-                v = c3.number_input("R$ Total", 0.0, step=10.0)
-                if st.button("Salvar"): adicionar_carteira(user['email'], p, q, v); st.rerun()
-            dfc = ler_carteira_usuario(user['email'])
-            if not dfc.empty:
-                st.dataframe(dfc)
-                rid = st.number_input("ID Remover", step=1)
-                if st.button("Remover"): remover_carteira(rid); st.rerun()
-            else: st.info("Vazia.")
-
-    elif menu == "Mercado P2P":
-        st.header("📢 Radar P2P")
-        if plano == "Free": mostrar_paywall()
-        else:
-            with st.form("p2p"):
-                c1, c2 = st.columns(2)
-                g = c1.text_input("Grupo")
-                p = c2.selectbox("Prog", ["Latam", "Smiles"])
-                t = st.radio("Tipo", ["VENDA", "COMPRA"])
-                val = st.number_input("Valor", 15.0)
-                obs = st.text_input("Obs")
-                if st.form_submit_button("Salvar"): adicionar_p2p(g, p, t, val, obs); st.success("Salvo!"); time.sleep(0.5); st.rerun()
-            try:
-                con = conectar_local()
-                dfp = pd.read_sql_query("SELECT * FROM mercado_p2p ORDER BY id DESC", con)
