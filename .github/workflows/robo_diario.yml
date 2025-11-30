@@ -1,0 +1,42 @@
+name: Robô de Milhas Diário
+
+on:
+  schedule:
+    # Roda todo dia às 10:00 UTC (07:00 Brasil)
+    - cron: '0 10 * * *'
+  workflow_dispatch: # Permite rodar manualmente clicando num botão
+
+jobs:
+  rodar-robo:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Permissão para salvar o banco de dados
+
+    steps:
+      - name: Baixar código
+        uses: actions/checkout@v3
+
+      - name: Instalar Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Instalar Dependências
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium
+
+      - name: Rodar Cotador
+        env:
+          # AQUI ENTRA SEU SEGREDO (TOKEN) DEPOIS
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python cotador.py
+
+      - name: Salvar Banco de Dados (Commit)
+        run: |
+          git config --global user.name 'Robo Milhas'
+          git config --global user.email 'robo@milhas.com'
+          git add milhas.db
+          git commit -m "Atualizando cotação diária" || echo "Nada mudou"
+          git push
