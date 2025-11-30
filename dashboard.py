@@ -22,47 +22,46 @@ def tela_login():
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
-        # Logo na tela de login também fica bonito
         st.image("https://cdn-icons-png.flaticon.com/512/723/723955.png", width=80)
         st.title("Milhas Pro System")
         st.markdown("### O seu Centro de Inteligência de Milhas Aéreas")
         
-        tab_login, tab_cadastro = st.tabs(["🔑 Entrar", "📝 Criar Conta"])
+        # --- LOGIN ---
+        email_login = st.text_input("E-mail")
+        senha_login = st.text_input("Senha", type="password")
         
-        with tab_login:
-            email_login = st.text_input("E-mail")
-            senha_login = st.text_input("Senha", type="password")
-            
-            if st.button("Acessar Sistema", type="primary"):
-                nome_usuario = banco.verificar_login(email_login, senha_login)
-                if nome_usuario:
+        if st.button("Acessar Sistema", type="primary"):
+            # 1. Tenta Login Mestre (Secrets)
+            # Verifica se existem segredos configurados e se batem
+            usuario_mestre = False
+            try:
+                if email_login == st.secrets["admin"]["email"] and senha_login == st.secrets["admin"]["senha"]:
                     st.session_state['logado'] = True
-                    st.session_state['usuario_nome'] = nome_usuario
-                    st.success(f"Bem-vindo, {nome_usuario}!")
-                    time.sleep(1)
-                    st.rerun()
-                else:
-                    st.error("E-mail ou senha incorretos.")
-
-        with tab_cadastro:
-            st.warning("⚠️ Área de novos membros")
-            novo_nome = st.text_input("Seu Nome Completo")
-            novo_email = st.text_input("Seu Melhor E-mail")
-            nova_senha = st.text_input("Crie uma Senha", type="password")
-            confirma_senha = st.text_input("Confirme a Senha", type="password")
+                    st.session_state['usuario_nome'] = st.secrets["admin"]["nome"]
+                    usuario_mestre = True
+            except:
+                pass # Se não tiver secrets configurado, ignora
             
-            if st.button("Cadastrar"):
-                if nova_senha != confirma_senha:
-                    st.error("As senhas não coincidem!")
-                elif len(nova_senha) < 4:
-                    st.error("A senha deve ter pelo menos 4 caracteres.")
-                else:
-                    sucesso = banco.cadastrar_usuario(novo_email, novo_nome, nova_senha)
-                    if sucesso:
-                        st.success("Conta criada com sucesso! Faça login na aba ao lado.")
-                    else:
-                        st.error("Este e-mail já está cadastrado.")
+            # 2. Se não for mestre, tenta Banco de Dados (Para rodar local)
+            if not usuario_mestre:
+                nome_db = banco.verificar_login(email_login, senha_login)
+                if nome_db:
+                    st.session_state['logado'] = True
+                    st.session_state['usuario_nome'] = nome_db
+                    usuario_mestre = True
+            
+            # Resultado Final
+            if usuario_mestre:
+                st.success(f"Bem-vindo, {st.session_state['usuario_nome']}!")
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.error("Acesso Negado. Verifique e-mail e senha.")
 
+        # Aviso sobre cadastro na nuvem
+        with st.expander("ℹ️ Sobre Cadastros"):
+            st.info("Para acesso permanente na versão Cloud, configure o usuário Admin nos 'Secrets' do Streamlit.")
+            
 # ==============================================================================
 # FUNÇÃO 2: O SISTEMA COMPLETO (ÁREA LOGADA)
 # ==============================================================================
