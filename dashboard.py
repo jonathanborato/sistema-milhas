@@ -1,22 +1,3 @@
-Com certeza\! Um design limpo e alinhado passa muito mais confiança para quem vai usar (e pagar) pelo sistema.
-
-Para fazer isso, vamos usar dois truques:
-
-1.  **CSS Personalizado:** Vamos injetar um código de estilo para forçar os botões a ficarem **Azuis** (cor da sua marca) em vez do padrão.
-2.  **Colunas de Layout:** Vamos usar "colunas invisíveis" para empurrar a logo para o centro exato da tela.
-
-Aqui está o código do `dashboard.py` **FINAL E ESTILIZADO**.
-
-### O que mudou no código abaixo:
-
-  * 🎨 **Botões:** Todos ficaram **Azul Marinho (\#0E436B)** com texto branco e mudam de cor quando passa o mouse.
-  * 🎯 **Logo Centralizada:** Tanto na tela de login quanto na barra lateral, a logo agora fica centralizada usando um sistema de colunas `[1, 2, 1]`.
-
------
-
-**Substitua todo o arquivo `dashboard.py` no GitHub por este:**
-
-```python
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -108,6 +89,7 @@ def autenticar_usuario(email, senha):
                 u = res.data[0]
                 return {"nome": u['nome'], "plano": u.get('plano', 'Free'), "email": email}
         except: pass
+    
     con = conectar_local()
     res = con.execute("SELECT nome FROM usuarios WHERE email = ? AND senha_hash = ?", (email, h)).fetchone()
     con.close()
@@ -233,7 +215,6 @@ def tela_login():
     
     with c2:
         # LOGO CENTRALIZADA
-        # Criamos 3 sub-colunas dentro da coluna do meio para centrar a imagem
         l, m, r = st.columns([1, 2, 1])
         with m:
             st.image(LOGO_URL, use_column_width=True)
@@ -401,4 +382,3 @@ def sistema_logado():
 # MAIN
 if st.session_state['user']: sistema_logado()
 else: tela_login()
- 
