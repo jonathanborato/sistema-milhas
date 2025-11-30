@@ -3,7 +3,7 @@ import pandas as pd
 import sqlite3
 import hashlib
 import time
-import re # Importante para verificar a senha forte
+import reit
 from datetime import datetime
 
 # --- 1. CONFIGURAÇÃO INICIAL ---
@@ -117,7 +117,7 @@ def admin_resetar_senha(id_user, nova_senha_texto):
     sb = get_supabase()
     if sb:
         try:
-            # Ao resetar pelo admin, não exigimos complexidade, pois é temporária
+            # Ao resetar pelo admin, não exigimos complexidade
             novo_hash = criar_hash(nova_senha_texto)
             sb.table("usuarios").update({"senha_hash": novo_hash}).eq("id", id_user).execute()
             return True
@@ -175,7 +175,6 @@ if 'user' not in st.session_state: st.session_state['user'] = None
 def tela_login():
     c1, c2, c3 = st.columns([1, 1.5, 1])
     with c2:
-        # AQUI ESTÁ O AVIÃO DE VOLTA! ✈️
         st.image("https://cdn-icons-png.flaticon.com/512/723/723955.png", width=80)
         st.markdown("<h1 style='text-align: center;'>MilhasPro System</h1>", unsafe_allow_html=True)
         
@@ -226,7 +225,6 @@ def sistema_logado():
     if plano == "Admin": opcoes.append("👑 Gestão de Usuários")
 
     with st.sidebar:
-        # AQUI ESTÁ O AVIÃO DE VOLTA NA BARRA LATERAL! ✈️
         st.image("https://cdn-icons-png.flaticon.com/512/723/723955.png", width=80)
         
         st.write(f"Olá, **{user['nome']}**")
@@ -286,45 +284,3 @@ def sistema_logado():
             try:
                 con = conectar_local()
                 dfp = pd.read_sql_query("SELECT * FROM mercado_p2p ORDER BY id DESC", con)
-                con.close()
-                if not dfp.empty: st.dataframe(dfp)
-            except: pass
-
-    elif menu == "Promoções":
-        st.header("🔥 Radar")
-        if plano == "Free": mostrar_paywall()
-        else:
-            try:
-                con = conectar_local()
-                dfp = pd.read_sql_query("SELECT * FROM promocoes ORDER BY id DESC LIMIT 15", con)
-                con.close()
-                for _, r in dfp.iterrows(): st.markdown(f"[{r['titulo']}]({r['link']})")
-            except: st.write("Nada ainda.")
-
-    elif menu == "👑 Gestão de Usuários":
-        st.header("Gestão de Clientes")
-        df_users = admin_listar_todos()
-        if not df_users.empty:
-            lista_emails = df_users['email'].tolist()
-            user_selecionado = st.selectbox("Editar Cliente", lista_emails)
-            dados_user = df_users[df_users['email'] == user_selecionado].iloc[0]
-            st.divider()
-            col_edit1, col_edit2 = st.columns(2)
-            with col_edit1:
-                with st.form("form_edit"):
-                    n_nm = st.text_input("Nome", value=dados_user['nome'])
-                    n_em = st.text_input("E-mail", value=dados_user['email'])
-                    n_tl = st.text_input("Tel", value=str(dados_user['telefone']) if dados_user['telefone'] else "")
-                    n_pl = st.selectbox("Plano", ["Free", "Pro", "Admin"], index=["Free", "Pro", "Admin"].index(dados_user.get('plano', 'Free')))
-                    n_st = st.selectbox("Status", ["Ativo", "Bloqueado"], index=0)
-                    if st.form_submit_button("💾 Salvar"):
-                        if admin_atualizar_dados(int(dados_user['id']), n_nm, n_em, n_tl, n_pl, n_st):
-                            st.success("Atualizado!"); time.sleep(1); st.rerun()
-            with col_edit2:
-                st.warning("Segurança")
-                n_pw = st.text_input("Resetar Senha", placeholder="Nova senha...")
-                if st.button("🔄 Confirmar Reset"):
-                    if len(n_pw)>3:
-                        if admin_resetar_senha(int(dados_user['id']), n_pw): st.success("Senha alterada!")
-                    else: st.error("Senha curta.")
-            st.divider
