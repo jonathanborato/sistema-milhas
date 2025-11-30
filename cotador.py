@@ -9,8 +9,9 @@ SEU_EMAIL = "jonathanfborato@gmail.com"
 QTD_MILHAS = "100000"
 
 # CONFIG DO TELEGRAM (Pegue os mesmos do robo.py)
-TELEGRAM_TOKEN = "8314873975:AAFTKjrbEWaCK_xplgYoEngxjRbjq3h84_I" 
-TELEGRAM_CHAT_ID = 5905547025 # Pode ser numero ou string
+import os
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 async def enviar_telegram(mensagem):
     try:
@@ -27,7 +28,7 @@ async def rodar_cotacao():
     print("🚀 Iniciando Sistema Completo...")
     
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False, slow_mo=50) 
+        browser = await p.chromium.launch(headless=True, slow_mo=50) 
         page = await browser.new_page()
         await page.goto("https://hotmilhas.com.br/")
 
