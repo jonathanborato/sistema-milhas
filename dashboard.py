@@ -46,12 +46,13 @@ def iniciar_banco():
 
 def criar_hash(senha): return hashlib.sha256(senha.encode()).hexdigest()
 
-# --- VALIDADOR DE SENHA FORTE ---
+# --- VALIDADOR DE SENHA FORTE (ATUALIZADO) ---
 def validar_senha_forte(senha):
-    if len(senha) < 8: return False, "A senha deve ter no mínimo 8 caracteres."
-    if not re.search(r"[a-z]", senha): return False, "A senha precisa ter letras minúsculas."
-    if not re.search(r"[A-Z]", senha): return False, "A senha precisa ter letras maiúsculas."
-    if not re.search(r"[0-9]", senha): return False, "A senha precisa ter números."
+    if len(senha) < 8: return False, "Mínimo 8 caracteres."
+    if not re.search(r"[a-z]", senha): return False, "Precisa de letra minúscula."
+    if not re.search(r"[A-Z]", senha): return False, "Precisa de letra maiúscula."
+    if not re.search(r"[0-9]", senha): return False, "Precisa de número."
+    if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", senha): return False, "Precisa de caractere especial (@, #, $, etc)."
     return True, ""
 
 # --- 4. FUNÇÕES DE USUÁRIO & ADMIN ---
@@ -166,6 +167,7 @@ def mostrar_paywall():
 
 # --- SESSÃO ---
 if 'user' not in st.session_state: st.session_state['user'] = None
+if 'erro_login' not in st.session_state: st.session_state['erro_login'] = False
 
 # ==============================================================================
 # TELA DE LOGIN / CADASTRO
@@ -177,12 +179,16 @@ def tela_login():
         except: pass
         st.markdown("<h1 style='text-align: center;'>MilhasPro System</h1>", unsafe_allow_html=True)
         
-        tab1, tab2, tab3 = st.tabs(["ENTRAR", "CRIAR CONTA", "ESQUECI A SENHA"])
+        tab1, tab2 = st.tabs(["ENTRAR", "CRIAR CONTA"])
         
         with tab1:
             email = st.text_input("E-mail", key="log_email")
             senha = st.text_input("Senha", type="password", key="log_pass")
+            
             if st.button("Acessar", type="primary", key="btn_log"):
+                # Reset do estado de erro ao tentar logar
+                st.session_state['erro_login'] = False
+                
                 try:
                     if email == st.secrets["admin"]["email"] and senha == st.secrets["admin"]["senha"]:
                         st.session_state['user'] = {"nome": st.secrets["admin"]["nome"], "plano": "Admin", "email": email}
@@ -193,25 +199,30 @@ def tela_login():
                 if user:
                     st.session_state['user'] = user
                     st.success(f"Olá, {user['nome']}!"); time.sleep(0.5); st.rerun()
-                else: st.error("Acesso negado.")
+                else:
+                    st.error("E-mail ou senha incorretos.")
+                    st.session_state['erro_login'] = True # Ativa a opção de recuperação
+            
+            # MOSTRAR RECUPERAÇÃO APENAS SE ERROU A SENHA
+            if st.session_state['erro_login']:
+                st.markdown("---")
+                with st.expander("Esqueci minha senha 🆘"):
+                    rec_email = st.text_input("Confirme seu e-mail para recuperação", value=email)
+                    if st.button("Solicitar Reset de Senha"):
+                        # Aqui você poderia integrar com email real no futuro
+                        st.info("📨 Solicitação registrada! Entre em contato com o suporte (WhatsApp) para validar sua identidade e receber a senha temporária.")
         
         with tab2:
-            st.info("Segurança: Use letra maiúscula, minúscula e número.")
+            st.info("Sua senha deve conter: Maiúscula, Minúscula, Número e Especial (@#$%).")
             nome = st.text_input("Nome", key="cad_nome")
             mail = st.text_input("E-mail", key="cad_mail")
             whats = st.text_input("WhatsApp", key="cad_whats")
-            pw = st.text_input("Senha", type="password", key="cad_pw", help="Mínimo 8 caracteres, letras e números.")
+            pw = st.text_input("Senha", type="password", key="cad_pw")
             
             if st.button("Cadastrar", key="btn_cad"):
                 ok, msg = registrar_usuario(nome, mail, pw, whats)
                 if ok: st.success(msg)
                 else: st.error(msg)
-
-        with tab3:
-            st.warning("Recuperação")
-            st.text_input("E-mail cadastrado", key="rec_mail")
-            if st.button("Solicitar Reset"):
-                st.info("✅ Solicitação enviada! Contate o suporte.")
 
 # ==============================================================================
 # SISTEMA LOGADO
@@ -234,7 +245,7 @@ def sistema_logado():
         st.divider()
         menu = st.radio("Menu", opcoes)
         st.divider()
-        if st.button("Sair"): st.session_state['user'] = None; st.rerun()
+        if st.button("Sair"): st.session_state['user'] = None; st.session_state['erro_login'] = False; st.rerun()
 
     df_cotacoes = ler_dados_historico()
 
