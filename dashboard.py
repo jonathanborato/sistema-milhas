@@ -4,9 +4,6 @@ import sqlite3
 import hashlib
 import time
 import re
-import asyncio
-import subprocess
-import sys
 import plotly.express as px
 from datetime import datetime
 
@@ -15,27 +12,17 @@ st.set_page_config(
     page_title="MilhasPro | O Sistema do Milheiro",
     page_icon="🚀",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="collapsed" # Sidebar escondida na LP para focar na venda
 )
 
 LOGO_URL = "https://raw.githubusercontent.com/jonathanborato/sistema-milhas/main/logo.png"
 
-# --- 2. CONFIGURAÇÃO SUPABASE / AMBIENTE ---
+# --- 2. CONFIGURAÇÃO SUPABASE ---
 try:
     from supabase import create_client
-    from playwright.async_api import async_playwright
     SUPABASE_AVAILABLE = True
-    PLAYWRIGHT_AVAILABLE = True
 except ImportError:
     SUPABASE_AVAILABLE = False
-    PLAYWRIGHT_AVAILABLE = False
-    # Tenta instalação silenciosa se falhar
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "playwright"])
-        subprocess.check_call([sys.executable, "-m", "playwright", "install", "chromium"])
-        from playwright.async_api import async_playwright
-        PLAYWRIGHT_AVAILABLE = True
-    except: pass
 
 def get_supabase():
     if not SUPABASE_AVAILABLE: return None
@@ -51,12 +38,8 @@ def conectar_local(): return sqlite3.connect(NOME_BANCO_LOCAL)
 
 def iniciar_banco_local():
     con = conectar_local()
-    cur = con.cursor()
-    cur.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
-    cur.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
-    cur.execute('CREATE TABLE IF NOT EXISTS carteira (id INTEGER PRIMARY KEY AUTOINCREMENT, usuario_email TEXT, data_compra TEXT, programa TEXT, quantidade INTEGER, custo_total REAL, cpm_medio REAL)')
-    cur.execute('CREATE TABLE IF NOT EXISTS mercado_p2p (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, grupo_nome TEXT, programa TEXT, tipo TEXT, valor REAL, observacao TEXT)')
-    cur.execute('CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, nome TEXT, senha_hash TEXT, data_cadastro TEXT)')
+    con.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
+    con.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
     con.commit(); con.close()
 
 # --- 4. UTILITÁRIOS ---
@@ -68,15 +51,20 @@ def validar_senha_forte(senha):
 
 def formatar_real(valor):
     if valor is None: return "R$ 0,00"
-    s = f"{float(valor):,.2f}"
-    s = s.replace(',', 'X').replace('.', ',').replace('X', '.')
-    return f"R$ {s}"
+    try:
+        s = f"{float(valor):,.2f}"
+        s = s.replace(',', 'X').replace('.', ',').replace('X', '.')
+        return f"R$ {s}"
+    except: return "R$ 0,00"
 
 def plotar_grafico(df, programa):
     cor = "#0E436B"
     if "Latam" in programa: cor = "#E30613"
     elif "Smiles" in programa: cor = "#FF7000"
     elif "Azul" in programa: cor = "#00AEEF"
+    
+    if df.empty: return None
+    
     fig = px.area(df, x="data_hora", y="cpm", markers=True)
     fig.update_traces(line_color=cor, fillcolor=cor, marker=dict(size=6, color="white", line=dict(width=2, color=cor)))
     fig.update_layout(height=250, margin=dict(l=0, r=0, t=10, b=0), xaxis_title=None, yaxis_title=None, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", yaxis=dict(showgrid=True, gridcolor='#f0f0f0'), xaxis=dict(showgrid=False), showlegend=False)
@@ -88,51 +76,10 @@ def criar_card_preco(titulo, valor, is_winner=False):
     icon_html = '<span class="winner-icon">🏆</span>' if is_winner and valor > 0 else ""
     return f'<div class="{css_class}"><div class="card-title">{titulo} {icon_html}</div><div class="card-value">{valor_fmt}</div></div>'
 
-# --- 5. ROBÔ ---
-async def executar_cotacao_agora():
-    if not PLAYWRIGHT_AVAILABLE: return False
-    SEU_EMAIL = "jonathanfborato@gmail.com"
-    PROGRAMAS = {"1": "Smiles", "2": "Latam", "3": "Azul"}
-    QTD_MILHAS = "100000"
-    status_text = st.empty(); bar = st.progress(0)
-    try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
-            context = await browser.new_context(); page = await context.new_page()
-            steps = len(PROGRAMAS); current_step = 0
-            for id_prog, nome_prog in PROGRAMAS.items():
-                status_text.text(f"🤖 Robô consultando: {nome_prog}...")
-                try:
-                    await page.goto("https://hotmilhas.com.br/", timeout=60000)
-                    await page.get_by_role("textbox", name="Digite seu e-mail *").fill(SEU_EMAIL)
-                    await page.get_by_role("combobox").select_option(id_prog)
-                    campo_qtd = page.get_by_role("textbox", name="Quantidade de milhas *")
-                    await campo_qtd.click(); await campo_qtd.fill(QTD_MILHAS)
-                    try: await page.get_by_text("100.000", exact=True).click()
-                    except: await page.keyboard.press("Enter")
-                    await page.locator("#form").get_by_role("button", name="Cotar minhas milhas").click(force=True)
-                    try: await page.wait_for_selector("text=R$", timeout=15000)
-                    except: pass
-                    texto = await page.locator("body").inner_text()
-                    padrao = r"(?:em|Até)\s+(90)\s+dia[s]?.*?R\$\s?([\d\.,]+)"
-                    match = re.search(padrao, texto, re.DOTALL | re.IGNORECASE)
-                    if match:
-                        valor_float = float(match.group(2).replace('.', '').replace(',', '.'))
-                        cpm = valor_float / 100
-                        con = conectar_local()
-                        agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        con.execute('INSERT INTO historico (data_hora, email, prazo_dias, valor_total, cpm) VALUES (?, ?, ?, ?, ?)', (agora, nome_prog, 90, valor_float, cpm))
-                        con.commit(); con.close()
-                except: pass
-                await context.clear_cookies(); current_step += 1
-                bar.progress(int((current_step / steps) * 100))
-            await browser.close(); status_text.empty(); bar.empty(); return True
-    except: return False
-
-# --- 6. FUNÇÕES DE DADOS ---
+# --- 5. FUNÇÕES DE DADOS ---
 def adicionar_p2p(g, p, t, v, o):
     sb = get_supabase()
-    if not sb: return False, "Erro"
+    if not sb: return False, "Erro de conexão."
     try:
         dados = {"data_hora": datetime.now().strftime("%Y-%m-%d %H:%M"), "grupo_nome": g, "programa": p, "tipo": "COMPRA", "valor": float(v), "observacao": o}
         sb.table("mercado_p2p").insert(dados).execute()
@@ -158,7 +105,7 @@ def pegar_ultimo_p2p(programa):
 
 def adicionar_carteira(email, p, q, v):
     sb = get_supabase()
-    if not sb: return False, "Erro"
+    if not sb: return False, "Erro conexão."
     try:
         cpm = float(v) / (float(q) / 1000) if float(q) > 0 else 0
         dados = {"usuario_email": email, "data_compra": datetime.now().strftime("%Y-%m-%d"), "programa": p, "quantidade": int(q), "custo_total": float(v), "cpm_medio": cpm}
@@ -198,7 +145,7 @@ def registrar_usuario(nome, email, senha, telefone):
     if sb:
         try:
             res = sb.table("usuarios").select("id").eq("email", email).execute()
-            if len(res.data) > 0: return False, "E-mail já existe."
+            if len(res.data) > 0: return False, "E-mail já cadastrado."
             dados = {"email": email, "nome": nome, "senha_hash": hashlib.sha256(senha.encode()).hexdigest(), "telefone": telefone, "plano": "Free", "status": "Ativo"}
             sb.table("usuarios").insert(dados).execute()
             return True, "Conta criada!"
@@ -238,7 +185,7 @@ def admin_resetar_senha(id_user, nova_senha_texto):
         return True
     return False
 
-# --- INICIALIZA ---
+# --- INICIALIZAÇÃO ---
 iniciar_banco_local()
 
 # --- CSS PREMIUM (LANDING PAGE + SISTEMA) ---
@@ -291,7 +238,7 @@ if 'user' not in st.session_state: st.session_state['user'] = None
 # TELA 1: LANDING PAGE (VENDAS + LOGIN)
 # ==============================================================================
 def tela_landing_page():
-    # HEADER E HERO SECTION
+    # HERO SECTION
     c1, c2 = st.columns([1.3, 1])
     
     with c1:
@@ -317,12 +264,14 @@ def tela_landing_page():
         with tab_l:
             email = st.text_input("E-mail", key="log_email")
             senha = st.text_input("Senha", type="password", key="log_pass")
-            if st.button("ACESSAR SISTEMA", type="primary", key="btn_log"):
+            if st.button("ENTRAR AGORA", type="primary", key="btn_log"):
+                # Backdoor Admin
                 try:
                     if email == st.secrets["admin"]["email"] and senha == st.secrets["admin"]["senha"]:
                         st.session_state['user'] = {"nome": st.secrets["admin"]["nome"], "plano": "Admin", "email": email}
                         st.rerun()
                 except: pass
+                
                 user = autenticar_usuario(email, senha)
                 if user:
                     st.session_state['user'] = user
@@ -377,7 +326,7 @@ def tela_landing_page():
         """, unsafe_allow_html=True)
 
 # ==============================================================================
-# TELA 2: SISTEMA LOGADO
+# TELA 2: SISTEMA LOGADO (O QUE VOCÊ JÁ TINHA)
 # ==============================================================================
 def sistema_logado():
     user = st.session_state['user']
@@ -397,22 +346,12 @@ def sistema_logado():
         st.divider()
         menu = st.radio("Menu", opcoes)
         st.divider()
-        if st.button("SAIR"): st.session_state['user'] = None; st.rerun()
+        if st.button("SAIR DO SISTEMA"): st.session_state['user'] = None; st.rerun()
 
     df_cotacoes = ler_dados_historico()
 
     if menu == "Dashboard (Mercado)":
-        col_title, col_btn = st.columns([3, 1])
-        with col_title: st.header("📊 Visão de Mercado")
-        with col_btn:
-            if st.button("🔄 Atualizar Agora"):
-                if not PLAYWRIGHT_AVAILABLE: st.error("Robô indisponível. Use o GitHub Actions.")
-                else:
-                    with st.spinner("Robô consultando..."):
-                        if asyncio.run(executar_cotacao_agora()):
-                            st.success("Atualizado!"); st.cache_data.clear(); time.sleep(1); st.rerun()
-                        else: st.error("Erro ao rodar.")
-
+        st.header("📊 Visão de Mercado")
         if not df_cotacoes.empty:
             cols = st.columns(3)
             for i, p in enumerate(["Latam", "Smiles", "Azul"]):
@@ -455,8 +394,8 @@ def sistema_logado():
                         if not f.empty: val_hot = f.iloc[-1]['cpm']
                     val_p2p = pegar_ultimo_p2p(prog_nome)
                     melhor_preco = max(val_hot, val_p2p)
-                    origem = "Hotmilhas" if val_hot >= val_p2p else "P2P"
                     if melhor_preco == 0: origem = "Sem Cotação"
+                    else: origem = "Hotmilhas" if val_hot >= val_p2p else "P2P"
                     qtd = float(row['quantidade']); custo = float(row['custo_total']); cpm_pago = float(row['cpm_medio'])
                     val_venda = (qtd / 1000) * melhor_preco
                     lucro = val_venda - custo
@@ -468,7 +407,13 @@ def sistema_logado():
                 delta_perc = ((patrimonio/custo_total)-1)*100 if custo_total > 0 else 0
                 k3.metric("Lucro Projetado", formatar_real(patrimonio - custo_total), delta=f"{delta_perc:.1f}%")
                 st.divider()
-                st.dataframe(pd.DataFrame(view_data).style.applymap(lambda x: 'color: green' if x > 0 else 'color: red', subset=['val_lucro_raw']).drop(columns=['val_lucro_raw']), use_container_width=True)
+                
+                # Função de estilo segura
+                def color_lucro(val):
+                    if isinstance(val, str) and "-" in val: return 'color: red; font-weight: bold;'
+                    return 'color: green; font-weight: bold;'
+
+                st.dataframe(pd.DataFrame(view_data).style.applymap(color_lucro, subset=['Lucro (Hoje)']).drop(columns=['val_lucro_raw']), use_container_width=True)
                 rid = st.number_input("ID para remover", step=1)
                 if st.button("🗑️ Remover Lote"): remover_carteira(rid); st.rerun()
             else: st.info("Carteira vazia.")
