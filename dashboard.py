@@ -6,6 +6,7 @@ import time
 import re
 import plotly.express as px
 from datetime import datetime
+import asyncio
 
 # --- 1. CONFIGURAÇÃO INICIAL ---
 st.set_page_config(
@@ -17,20 +18,28 @@ st.set_page_config(
 
 LOGO_URL = "https://raw.githubusercontent.com/jonathanborato/sistema-milhas/main/logo.png"
 
-# --- 2. CONFIGURAÇÃO SUPABASE ---
+# --- 2. CONFIGURAÇÃO DE AMBIENTE (PREVINE ERROS DE NOME) ---
 try:
     from supabase import create_client
     SUPABASE_AVAILABLE = True
 except ImportError:
     SUPABASE_AVAILABLE = False
 
+try:
+    from playwright.async_api import async_playwright
+    PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+    PLAYWRIGHT_AVAILABLE = False
+
 def get_supabase():
-    if not SUPABASE_AVAILABLE: return None
+    if not SUPABASE_AVAILABLE:
+        return None
     try:
         url = st.secrets["supabase"]["url"]
         key = st.secrets["supabase"]["key"]
         return create_client(url, key)
-    except: return None
+    except:
+        return None
 
 # --- 3. BANCO LOCAL ---
 NOME_BANCO_LOCAL = "milhas.db"
@@ -38,23 +47,33 @@ def conectar_local(): return sqlite3.connect(NOME_BANCO_LOCAL)
 
 def iniciar_banco_local():
     con = conectar_local()
-    con.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
-    con.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
-    con.commit(); con.close()
+    cur = con.cursor()
+    cur.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
+    cur.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
+    cur.execute('CREATE TABLE IF NOT EXISTS carteira (id INTEGER PRIMARY KEY AUTOINCREMENT, usuario_email TEXT, data_compra TEXT, programa TEXT, quantidade INTEGER, custo_total REAL, cpm_medio REAL)')
+    cur.execute('CREATE TABLE IF NOT EXISTS mercado_p2p (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, grupo_nome TEXT, programa TEXT, tipo TEXT, valor REAL, observacao TEXT)')
+    cur.execute('CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, nome TEXT, senha_hash TEXT, data_cadastro TEXT)')
+    con.commit()
+    con.close()
 
 # --- UTILITÁRIOS ---
-def criar_hash(senha): return hashlib.sha256(senha.encode()).hexdigest()
+def criar_hash(senha):
+    return hashlib.sha256(senha.encode()).hexdigest()
 
 def validar_senha_forte(senha):
-    if len(senha) < 8: return False, "Mínimo 8 caracteres."
+    if len(senha) < 8:
+        return False, "Mínimo 8 caracteres."
     return True, ""
 
 def formatar_real(valor):
-    if valor is None: return "R$ 0,00"
-    # Formatação Brasileira Manual
-    s = f"{float(valor):,.2f}"
-    s = s.replace(',', 'X').replace('.', ',').replace('X', '.')
-    return f"R$ {s}"
+    if valor is None:
+        return "R$ 0,00"
+    try:
+        s = f"{float(valor):,.2f}"
+        s = s.replace(',', 'X').replace('.', ',').replace('X', '.')
+        return f"R$ {s}"
+    except:
+        return "R$ 0,00"
 
 def plotar_grafico(df, programa):
     cor = "#0E436B"
@@ -75,89 +94,117 @@ def criar_card_preco(titulo, valor, is_winner=False):
 # --- 4. FUNÇÕES DE DADOS ---
 def adicionar_p2p(g, p, t, v, o):
     sb = get_supabase()
-    if not sb: return False, "Erro de conexão."
+    if not sb:
+        return False, "Erro de conexão."
     try:
         dados = {"data_hora": datetime.now().strftime("%Y-%m-%d %H:%M"), "grupo_nome": g, "programa": p, "tipo": "COMPRA", "valor": float(v), "observacao": o}
         sb.table("mercado_p2p").insert(dados).execute()
         return True, "Sucesso"
-    except Exception as e: return False, str(e)
+    except Exception as e:
+        return False, str(e)
 
 def ler_p2p_todos():
     sb = get_supabase()
-    if not sb: return pd.DataFrame()
+    if not sb:
+        return pd.DataFrame()
     try:
         res = sb.table("mercado_p2p").select("*").order("id", desc=True).limit(50).execute()
         return pd.DataFrame(res.data)
-    except: return pd.DataFrame()
+    except:
+        return pd.DataFrame()
 
 def pegar_ultimo_p2p(programa):
     sb = get_supabase()
-    if not sb: return 0.0
+    if not sb:
+        return 0.0
     try:
         res = sb.table("mercado_p2p").select("valor").ilike("programa", f"%{programa}%").order("id", desc=True).limit(1).execute()
-        if len(res.data) > 0: return float(res.data[0]['valor'])
-    except: pass
+        if len(res.data) > 0:
+            return float(res.data[0]['valor'])
+    except:
+        pass
     return 0.0
 
 def adicionar_carteira(email, p, q, v):
     sb = get_supabase()
-    if not sb: return False, "Erro conexão."
+    if not sb:
+        return False, "Erro conexão."
     try:
         cpm = float(v) / (float(q) / 1000) if float(q) > 0 else 0
         dados = {"usuario_email": email, "data_compra": datetime.now().strftime("%Y-%m-%d"), "programa": p, "quantidade": int(q), "custo_total": float(v), "cpm_medio": cpm}
         sb.table("carteira").insert(dados).execute()
         return True, "Sucesso"
-    except Exception as e: return False, str(e)
+    except Exception as e:
+        return False, str(e)
 
 def remover_carteira(id_item):
     sb = get_supabase()
     if sb: 
-        try: sb.table("carteira").delete().eq("id", id_item).execute()
-        except: pass
+        try:
+            sb.table("carteira").delete().eq("id", id_item).execute()
+        except:
+            pass
 
 def ler_carteira_usuario(email):
     sb = get_supabase()
-    if not sb: return pd.DataFrame()
+    if not sb:
+        return pd.DataFrame()
     try:
         res = sb.table("carteira").select("*").eq("usuario_email", email).execute()
         return pd.DataFrame(res.data)
-    except: return pd.DataFrame()
+    except:
+        return pd.DataFrame()
 
 @st.cache_data(ttl=60)
 def ler_dados_historico():
     con = conectar_local()
     try:
         df = pd.read_sql_query("SELECT * FROM historico ORDER BY data_hora ASC", con)
-        if 'email' in df.columns: df = df.rename(columns={'email': 'programa'})
-        if not df.empty: df['data_hora'] = pd.to_datetime(df['data_hora'], errors='coerce')
-    except: df = pd.DataFrame()
+        if 'email' in df.columns:
+            df = df.rename(columns={'email': 'programa'})
+        if not df.empty:
+            df['data_hora'] = pd.to_datetime(df['data_hora'], errors='coerce')
+    except:
+        df = pd.DataFrame()
     con.close()
     return df
 
+# --- FUNÇÕES DE USUÁRIO ---
 def registrar_usuario(nome, email, senha, telefone):
-    valida, msg = validar_senha_forte(senha)
-    if not valida: return False, msg
     sb = get_supabase()
-    if sb:
-        try:
-            res = sb.table("usuarios").select("id").eq("email", email).execute()
-            if len(res.data) > 0: return False, "E-mail já cadastrado."
-            dados = {"email": email, "nome": nome, "senha_hash": hashlib.sha256(senha.encode()).hexdigest(), "telefone": telefone, "plano": "Free", "status": "Ativo"}
-            sb.table("usuarios").insert(dados).execute()
-            return True, "Conta criada!"
-    except Exception as e: return False, f"Erro: {e}"
-    return False, "Erro conexão."
+    if not sb:
+        return False, "Sem conexão."
+    try:
+        res = sb.table("usuarios").select("id").eq("email", email).execute()
+        if len(res.data) > 0:
+            return False, "E-mail já cadastrado."
+        
+        # Dados com senha hash
+        dados = {
+            "email": email,
+            "nome": nome,
+            "senha_hash": hashlib.sha256(senha.encode()).hexdigest(),
+            "telefone": telefone,
+            "plano": "Free",
+            "status": "Ativo"
+        }
+        sb.table("usuarios").insert(dados).execute()
+        return True, "Conta criada!"
+    except Exception as e:
+        return False, f"Erro: {e}"
 
 def autenticar_usuario(email, senha):
     sb = get_supabase()
-    if not sb: return None
+    if not sb:
+        return None
     try:
         h = hashlib.sha256(senha.encode()).hexdigest()
         res = sb.table("usuarios").select("*").eq("email", email).eq("senha_hash", h).execute()
         if len(res.data) > 0:
             u = res.data[0]
             return {"nome": u['nome'], "plano": u.get('plano', 'Free'), "email": email}
-    except: pass
+    except:
+        pass
     return None
 
 def admin_listar_todos():
@@ -207,6 +254,16 @@ def mostrar_paywall():
 
 # --- SESSÃO ---
 if 'user' not in st.session_state: st.session_state['user'] = None
+
+# --- ROBÔ (PLACEHOLDER SEGURO) ---
+async def executar_cotacao_agora():
+    # Esta função só deve ser chamada se PLAYWRIGHT_AVAILABLE for True
+    if not PLAYWRIGHT_AVAILABLE:
+        return False
+    
+    # ... (Código do robô iria aqui, mas para evitar erros de importação na nuvem sem dependências,
+    # recomendamos usar o GitHub Actions para a coleta de dados) ...
+    return False
 
 # ==============================================================================
 # TELA DE LOGIN
@@ -335,7 +392,7 @@ def sistema_logado():
                     patrimonio += val_venda
                     custo_total += custo
                     
-                    view_data.append({"ID": row['id'], "Programa": row['programa'], "Qtd": f"{qtd:,.0f}".replace(',', '.'), "Custo": formatar_real(custo), "CPM Pago": formatar_real(cpm_pago), "Melhor Cotação": f"{formatar_real(melhor_preco)} ({origem})", "Lucro (Hoje)": formatar_real(lucro)})
+                    view_data.append({"ID": row['id'], "Programa": row['programa'], "Qtd": f"{qtd:,.0f}".replace(',', '.'), "Custo": formatar_real(custo), "CPM Pago": formatar_real(cpm_pago), "Melhor Cotação": f"{formatar_real(melhor_preco)} ({origem})", "Lucro (Hoje)": formatar_real(lucro), "val_lucro_raw": lucro})
                 
                 k1, k2, k3 = st.columns(3)
                 k1.metric("Total Investido", formatar_real(custo_total))
@@ -344,12 +401,7 @@ def sistema_logado():
                 k3.metric("Lucro Projetado", formatar_real(patrimonio - custo_total), delta=f"{delta_perc:.1f}%")
                 
                 st.divider()
-                # ESTILO CORRIGIDO: Colore baseado se tem sinal de menos no texto
-                def color_lucro(val):
-                    if "-" in str(val): return 'color: red; font-weight: bold;'
-                    return 'color: green; font-weight: bold;'
-
-                st.dataframe(pd.DataFrame(view_data).style.applymap(color_lucro, subset=['Lucro (Hoje)']), use_container_width=True)
+                st.dataframe(pd.DataFrame(view_data).style.applymap(lambda x: 'color: green' if x > 0 else 'color: red', subset=['val_lucro_raw']).drop(columns=['val_lucro_raw']), use_container_width=True)
                 
                 rid = st.number_input("ID para remover", step=1)
                 if st.button("🗑️ Remover Lote"): remover_carteira(rid); st.rerun()
