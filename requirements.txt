@@ -4,3 +4,6 @@ streamlit
 python-telegram-bot
 feedparser
 supabase
+stripe
+mercadopago
+plotly
