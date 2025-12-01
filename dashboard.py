@@ -10,7 +10,7 @@ from datetime import datetime
 
 # --- 1. CONFIGURAÇÃO INICIAL ---
 st.set_page_config(
-    page_title="MilhasPro | System",
+    page_title="MilhasPro System",
     page_icon="🚀",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -39,11 +39,12 @@ def conectar_local(): return sqlite3.connect(NOME_BANCO_LOCAL)
 
 def iniciar_banco_local():
     con = conectar_local()
-    con.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
-    con.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
-    con.execute('CREATE TABLE IF NOT EXISTS carteira (id INTEGER PRIMARY KEY AUTOINCREMENT, usuario_email TEXT, data_compra TEXT, programa TEXT, quantidade INTEGER, custo_total REAL, cpm_medio REAL)')
-    con.execute('CREATE TABLE IF NOT EXISTS mercado_p2p (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, grupo_nome TEXT, programa TEXT, tipo TEXT, valor REAL, observacao TEXT)')
-    con.execute('CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, nome TEXT, senha_hash TEXT, data_cadastro TEXT)')
+    cur = con.cursor()
+    cur.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
+    cur.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
+    cur.execute('CREATE TABLE IF NOT EXISTS carteira (id INTEGER PRIMARY KEY AUTOINCREMENT, usuario_email TEXT, data_compra TEXT, programa TEXT, quantidade INTEGER, custo_total REAL, cpm_medio REAL)')
+    cur.execute('CREATE TABLE IF NOT EXISTS mercado_p2p (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, grupo_nome TEXT, programa TEXT, tipo TEXT, valor REAL, observacao TEXT)')
+    cur.execute('CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, nome TEXT, senha_hash TEXT, data_cadastro TEXT)')
     con.commit(); con.close()
 
 # --- 4. UTILITÁRIOS ---
@@ -66,7 +67,9 @@ def plotar_grafico(df, programa):
     if "Latam" in programa: cor = "#E30613"
     elif "Smiles" in programa: cor = "#FF7000"
     elif "Azul" in programa: cor = "#00AEEF"
+    
     if df.empty: return None
+    
     fig = px.area(df, x="data_hora", y="cpm", markers=True)
     fig.update_traces(line_color=cor, fillcolor=cor, marker=dict(size=6, color="white", line=dict(width=2, color=cor)))
     fig.update_layout(height=250, margin=dict(l=0, r=0, t=10, b=0), xaxis_title=None, yaxis_title=None, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", yaxis=dict(showgrid=True, gridcolor='#f0f0f0'), xaxis=dict(showgrid=False), showlegend=False)
@@ -79,6 +82,7 @@ def criar_card_preco(titulo, valor, is_winner=False):
     return f'<div class="{css_class}"><div class="card-title">{titulo} {icon_html}</div><div class="card-value">{valor_fmt}</div></div>'
 
 # --- 5. FUNÇÕES DE DADOS ---
+
 @st.cache_data(ttl=900) 
 def buscar_promocoes_live():
     feeds = [
@@ -206,71 +210,57 @@ def admin_resetar_senha(id_user, nova_senha_texto):
         return True
     return False
 
-# --- CÉREBRO DO ROBÔ DE PASSAGENS ---
-def calcular_melhor_rota(programa_destino, milhas_necessarias):
-    # Simulação de Inteligência de Mercado (Baseado nos custos médios atuais)
-    cenarios_mercado = {
-        "Smiles": [
-            {"rota": "Compra Direta Smiles (Balcão)", "cpm_final": 21.00},
-            {"rota": "Livelo -> Smiles (Bônus 80%)", "cpm_final": 19.44},
-            {"rota": "Esfera -> Smiles (Bônus 100%)", "cpm_final": 17.50}
-        ],
-        "Latam Pass": [
-             {"rota": "Compra Direta Latam", "cpm_final": 28.00},
-             {"rota": "Livelo -> Latam (Bônus 30%)", "cpm_final": 26.92},
-        ],
-        "TudoAzul": [
-             {"rota": "Compra Direta Azul", "cpm_final": 25.00},
-             {"rota": "Livelo -> Azul (Bônus 100%)", "cpm_final": 17.50},
-        ]
-    }
-    
-    if programa_destino not in cenarios_mercado:
-        return None
-
-    opcoes = cenarios_mercado[programa_destino]
-    melhor_opcao = None
-    menor_custo = float('inf')
-
-    for op in opcoes:
-        custo_total = (milhas_necessarias / 1000) * op['cpm_final']
-        op['custo_total_calculado'] = custo_total
-        if custo_total < menor_custo:
-            menor_custo = custo_total
-            melhor_opcao = op
-            
-    return melhor_opcao
-
 # --- INICIALIZAÇÃO ---
 iniciar_banco_local()
 
 # --- CSS PREMIUM ---
 st.markdown("""
 <style>
+    /* Fundo e Fonte */
     .stApp { background: linear-gradient(180deg, #F8FAFC 0%, #FFFFFF 100%); font-family: 'Segoe UI', sans-serif; }
     .block-container {padding-top: 2rem !important;}
-    .lp-card { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); text-align: center; height: 100%; border: 1px solid #EEF2F6; transition: transform 0.3s ease; }
+    
+    /* Cards da Landing Page */
+    .lp-card {
+        background: white; padding: 25px; border-radius: 12px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.05); text-align: center;
+        height: 100%; border: 1px solid #EEF2F6; transition: transform 0.3s ease;
+    }
     .lp-card:hover { transform: translateY(-5px); box-shadow: 0 8px 25px rgba(14, 67, 107, 0.15); border-color: #0E436B; }
     .lp-icon { font-size: 2.5rem; margin-bottom: 15px; display: block; }
     .lp-title { font-weight: 700; color: #0E436B; margin-bottom: 10px; font-size: 1.1rem; }
     .lp-text { color: #64748B; font-size: 0.9rem; line-height: 1.5; }
-    div.stButton > button { width: 100%; background-color: #0E436B; color: white; border-radius: 8px; font-weight: 600; border: none; padding: 0.6rem 1rem; transition: background 0.2s; }
+
+    /* Botões */
+    div.stButton > button {
+        width: 100%; background-color: #0E436B; color: white; border-radius: 8px; 
+        font-weight: 600; border: none; padding: 0.6rem 1rem; transition: background 0.2s;
+    }
     div.stButton > button:hover { background-color: #0A304E; color: white; box-shadow: 0 2px 8px rgba(14, 67, 107, 0.3); }
+    
+    /* Animações do Sistema */
     @keyframes pulse-green { 0% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(37, 211, 102, 0); } 100% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0); } }
+    @keyframes spin-slow { 0% { transform: rotate(0deg); } 25% { transform: rotate(15deg); } 75% { transform: rotate(-15deg); } 100% { transform: rotate(0deg); } }
+    
     .price-card { background: white; padding: 15px; border-radius: 10px; border: 1px solid #E2E8F0; text-align: center; margin-bottom: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
     .winner-pulse { border: 2px solid #25d366 !important; background: #F0FDF4 !important; animation: pulse-green 2s infinite; color: #0E436B; }
     .card-title { font-size: 0.85rem; color: #64748B; margin-bottom: 5px; font-weight: 600; }
     .card-value { font-size: 1.5rem; font-weight: 800; color: #1E293B; }
     .winner-icon { display: inline-block; animation: spin-slow 3s infinite ease-in-out; margin-left: 5px; }
+    
     div[data-testid="stImage"] { display: flex; justify-content: center; align-items: center; width: 100%; }
     a {text-decoration: none; color: #0E436B; font-weight: bold;}
-    .pricing-card { background: white; padding: 40px; border-radius: 15px; text-align: center; border: 1px solid #eee; box-shadow: 0 10px 30px rgba(0,0,0,0.1); position: relative; overflow: hidden; }
-    .popular-badge { background: #FFC107; color: #333; padding: 5px 20px; font-weight: bold; font-size: 0.8rem; position: absolute; top: 20px; right: -30px; transform: rotate(45deg); width: 120px; }
     
-    /* Resultado do Robô - Verde (Lucro) e Vermelho (Prejuízo) */
-    .robo-box { padding: 25px; border-radius: 15px; text-align: center; margin-top: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
-    .box-green { background: linear-gradient(135deg, #0E436B 0%, #0A304E 100%); color: white; }
-    .box-red { background: #FFF5F5; border: 2px solid #E53E3E; color: #C53030; }
+    /* Pricing Card */
+    .pricing-card {
+        background: white; padding: 40px; border-radius: 15px; text-align: center;
+        border: 1px solid #eee; box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        position: relative; overflow: hidden;
+    }
+    .popular-badge {
+        background: #FFC107; color: #333; padding: 5px 20px; font-weight: bold; font-size: 0.8rem;
+        position: absolute; top: 20px; right: -30px; transform: rotate(45deg); width: 120px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -282,46 +272,64 @@ def mostrar_paywall():
 if 'user' not in st.session_state: st.session_state['user'] = None
 
 # ==============================================================================
-# TELA 1: LANDING PAGE
+# TELA 1: LANDING PAGE (VENDAS + LOGIN)
 # ==============================================================================
 def tela_landing_page():
     c1, c2 = st.columns([1.3, 1])
+    
     with c1:
         st.image(LOGO_URL, width=220)
         st.markdown("""
         # O Sistema Definitivo para Milheiros Profissionais 🚀
+        
         Domine o mercado de milhas com inteligência de dados. O **MilhasPro** automatiza cotações, monitora o mercado P2P e gerencia seu patrimônio em tempo real.
+        
+        ✅ **Robô Automático:** Cotação Hotmilhas diária.  
+        ✅ **Radar P2P:** Preços reais dos grupos de Telegram.  
+        ✅ **Gestão de Carteira:** Controle seu lucro exato.
         """)
+        st.write("")
+    
     with c2:
         st.markdown("<div style='background: white; padding: 25px; border-radius: 12px; box-shadow: 0 10px 30px rgba(14, 67, 107, 0.1); border: 1px solid #E2E8F0;'>", unsafe_allow_html=True)
         st.markdown("<h3 style='text-align: center; color: #0E436B; margin-top: 0;'>Acessar Painel</h3>", unsafe_allow_html=True)
+        
         tab_l, tab_c = st.tabs(["ENTRAR", "CRIAR CONTA"])
+        
         with tab_l:
             with st.form("login_form"):
                 email = st.text_input("E-mail")
                 senha = st.text_input("Senha", type="password")
-                if st.form_submit_button("ENTRAR AGORA"):
+                submitted = st.form_submit_button("ENTRAR AGORA")
+                
+                if submitted:
                     try:
                         if email == st.secrets["admin"]["email"] and senha == st.secrets["admin"]["senha"]:
                             st.session_state['user'] = {"nome": st.secrets["admin"]["nome"], "plano": "Admin", "email": email}
                             st.rerun()
                     except: pass
+                    
                     user = autenticar_usuario(email, senha)
                     if user:
                         st.session_state['user'] = user
                         st.toast(f"Bem-vindo, {user['nome']}!")
-                        time.sleep(0.5); st.rerun()
+                        time.sleep(0.5)
+                        st.rerun()
                     else: st.error("Dados inválidos.")
+        
         with tab_c:
             with st.form("cad_form"):
                 nome = st.text_input("Nome")
                 c_email = st.text_input("E-mail")
                 whats = st.text_input("WhatsApp")
                 pw = st.text_input("Senha (Min 8 chars)")
-                if st.form_submit_button("CADASTRAR GRÁTIS"):
+                submitted_cad = st.form_submit_button("CADASTRAR GRÁTIS")
+                
+                if submitted_cad:
                     ok, msg = registrar_usuario(nome, c_email, pw, whats)
                     if ok: st.success("Sucesso! Faça login."); st.balloons()
                     else: st.error(msg)
+        
         st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("---")
@@ -329,7 +337,7 @@ def tela_landing_page():
     col_f1, col_f2, col_f3 = st.columns(3)
     with col_f1: st.markdown("""<div class="lp-card"><span class="lp-icon">🤖</span><div class="lp-title">Automação Inteligente</div><div class="lp-text">Nosso robô monitora a Hotmilhas todo dia e salva o histórico para você nunca perder o pico de venda.</div></div>""", unsafe_allow_html=True)
     with col_f2: st.markdown("""<div class="lp-card"><span class="lp-icon">👥</span><div class="lp-title">Radar P2P Exclusivo</div><div class="lp-text">Saiba quanto estão pagando nos grupos fechados. Compare preço oficial x paralelo e venda mais caro.</div></div>""", unsafe_allow_html=True)
-    with col_f3: st.markdown("""<div class="lp-card"><span class="lp-icon">💼</span><div class="lp-title">Controle de Patrimônio</div><div class="lp-text">Registre suas compras e veja seu lucro baseado na melhor cotação do dia automaticamente.</div></div>""", unsafe_allow_html=True)
+    with col_f3: st.markdown("""<div class="lp-card"><span class="lp-icon">💼</span><div class="lp-title">Controle de Patrimônio</div><div class="lp-text">Registre suas compras e veja seu lucro baseado na MELHOR cotação do dia automaticamente.</div></div>""", unsafe_allow_html=True)
     
     st.markdown("---")
     c_p1, c_p2, c_p3 = st.columns([1, 2, 1])
@@ -355,15 +363,17 @@ def sistema_logado():
     user = st.session_state['user']
     plano = user['plano']
     
-    opcoes = ["Dashboard (Mercado)", "✈️ Robô de Passagens (Beta)", "Minha Carteira", "Mercado P2P", "Promoções"]
+    opcoes = ["Dashboard (Mercado)", "Minha Carteira", "Mercado P2P", "Promoções"]
     if plano == "Admin": opcoes.append("👑 Gestão de Usuários")
 
     with st.sidebar:
         st.image(LOGO_URL, width=180)
         st.markdown(f"<div style='text-align: center; margin-top: 10px;'>Olá, <b>{user['nome'].split()[0]}</b></div>", unsafe_allow_html=True)
+        
         if plano == "Admin": st.success("👑 ADMIN")
         elif plano == "Pro": st.success("⭐ PRO")
         else: st.info("🔹 FREE")
+        
         st.divider()
         menu = st.radio("Menu", opcoes)
         st.divider()
@@ -373,73 +383,52 @@ def sistema_logado():
 
     if menu == "Dashboard (Mercado)":
         st.header("📊 Visão de Mercado")
+        
+        # --- NOVO PAINEL DE CUSTO DE AQUISIÇÃO ---
+        st.info("💡 Cotação de Compra de Pontos (Hoje)")
+        col_c1, col_c2, col_c3 = st.columns(3)
+        
+        # Preços Padrão (Livelo 70, Esfera 70)
+        desc_livelo = col_c1.number_input("Desconto Livelo (%)", 0, 60, 52, help="Assinantes Clube geralmente têm 50-52%")
+        desc_esfera = col_c2.number_input("Desconto Esfera (%)", 0, 60, 50, help="Promoção padrão é 50%")
+        
+        custo_livelo = 70 * (1 - desc_livelo/100)
+        custo_esfera = 70 * (1 - desc_esfera/100)
+        
+        col_c3.metric("Custo Livelo (Milheiro)", f"R$ {custo_livelo:.2f}")
+        # col_c3.metric("Custo Esfera", f"R$ {custo_esfera:.2f}") # Opcional mostrar ambos
+        
+        st.divider()
+        # --------------------------------------------
+
         if not df_cotacoes.empty:
             cols = st.columns(3)
             for i, p in enumerate(["Latam", "Smiles", "Azul"]):
                 d = df_cotacoes[df_cotacoes['programa'].str.contains(p, case=False, na=False)]
                 val_hot = d.iloc[-1]['cpm'] if not d.empty else 0.0
                 val_p2p = pegar_ultimo_p2p(p)
+                
                 hot_wins = val_hot > val_p2p and val_hot > 0
                 p2p_wins = val_p2p > val_hot and val_p2p > 0
+                
                 with cols[i]:
                     st.markdown(f"### {p}")
                     mc1, mc2 = st.columns(2)
                     with mc1: st.markdown(criar_card_preco("🤖 Hotmilhas", val_hot, hot_wins), unsafe_allow_html=True)
                     with mc2: st.markdown(criar_card_preco("👥 P2P", val_p2p, p2p_wins), unsafe_allow_html=True)
+                    
+                    # CÁLCULO DE SPREAD
+                    melhor_venda = max(val_hot, val_p2p)
+                    if melhor_venda > 0:
+                        # Exemplo: Transferência 100%
+                        custo_transf = custo_livelo / 2 # Se bônus for 100%
+                        lucro = melhor_venda - custo_transf
+                        margem = (lucro / custo_transf) * 100
+                        st.caption(f"Margem (100% bônus): {margem:.1f}%")
+                    
                     st.divider()
                     if not d.empty: st.plotly_chart(plotar_grafico(d, p), use_container_width=True)
         else: st.warning("Aguardando robô.")
-
-    # --- A NOVA ÁREA SURREAL (ROBÔ DE PASSAGENS) ---
-    elif menu == "✈️ Robô de Passagens (Beta)":
-        st.header("✈️ Calculadora de Emissão")
-        st.info("Descubra se vale a pena emitir com milhas ou pagar em dinheiro.")
-
-        if plano == "Free": mostrar_paywall()
-        else:
-            with st.form("robo_form"):
-                c1, c2 = st.columns(2)
-                prog_destino = c1.selectbox("Onde você viu a passagem?", ["Smiles", "Latam Pass", "TudoAzul"])
-                milhas = c2.number_input("Valor em Milhas (Total)", min_value=1000, step=1000, value=50000)
-                valor_dinheiro = st.number_input("Quanto custa essa mesma passagem em DINHEIRO (R$)?", min_value=100.0, step=50.0, value=2500.0)
-                
-                if st.form_submit_button("🤖 CALCULAR"):
-                    with st.spinner("Analisando custo de oportunidade..."):
-                        time.sleep(1)
-                        melhor_cenario = calcular_melhor_rota(prog_destino, milhas)
-                        
-                        if melhor_cenario:
-                            custo_milhas = melhor_cenario['custo_total_calculado']
-                            
-                            # CENÁRIO 1: MILHAS É MAIS BARATO
-                            if custo_milhas < valor_dinheiro:
-                                economia = valor_dinheiro - custo_milhas
-                                perc = (economia / valor_dinheiro) * 100
-                                st.markdown(f"""
-                                <div class="robo-box box-green">
-                                    <h2>🚀 VALE A PENA EMITIR COM MILHAS!</h2>
-                                    <p style="font-size: 1.2rem;">Melhor estratégia: <b>{melhor_cenario['rota']}</b></p>
-                                    <hr style="border-color: rgba(255,255,255,0.3);">
-                                    <div style="font-size: 2rem; font-weight: 800; margin-top: 10px;">Economia: {formatar_real(economia)} ({perc:.0f}%)</div>
-                                    <p>Custo Milhas: {formatar_real(custo_milhas)} vs Dinheiro: {formatar_real(valor_dinheiro)}</p>
-                                </div>
-                                """, unsafe_allow_html=True)
-                                st.balloons()
-                            
-                            # CENÁRIO 2: DINHEIRO É MAIS BARATO
-                            else:
-                                prejuizo = custo_milhas - valor_dinheiro
-                                st.markdown(f"""
-                                <div class="robo-box box-red">
-                                    <h2>🛑 PAGUE EM DINHEIRO!</h2>
-                                    <p style="font-size: 1.2rem;">As milhas estão caras para esse voo.</p>
-                                    <hr>
-                                    <div style="font-size: 1.5rem; font-weight: bold; margin-top: 10px;">Você perderia: {formatar_real(prejuizo)}</div>
-                                    <p>Custo Milhas: {formatar_real(custo_milhas)} vs Dinheiro: {formatar_real(valor_dinheiro)}</p>
-                                </div>
-                                """, unsafe_allow_html=True)
-                        else:
-                            st.error("Programa não suportado.")
 
     elif menu == "Minha Carteira":
         st.header("💼 Carteira")
@@ -513,7 +502,7 @@ def sistema_logado():
         st.header("🔥 Radar")
         if plano == "Free": mostrar_paywall()
         else:
-            with st.spinner("Buscando ao vivo..."):
+            with st.spinner("Buscando promoções..."):
                 df_news = buscar_promocoes_live()
                 if not df_news.empty:
                     for _, row in df_news.iterrows():
