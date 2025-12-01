@@ -4,9 +4,13 @@ import sqlite3
 import hashlib
 import time
 import re
+import asyncio
+import subprocess
+import sys
+import plotly.express as px
 from datetime import datetime
 
-# --- 1. CONFIGURAÇÃO INICIAL ---
+# --- 1. CONFIGURAÇÃO INICIAL (Obrigatório ser a primeira linha) ---
 st.set_page_config(
     page_title="MilhasPro System",
     page_icon="🚀",
@@ -16,16 +20,25 @@ st.set_page_config(
 
 LOGO_URL = "https://raw.githubusercontent.com/jonathanborato/sistema-milhas/main/logo.png"
 
-# --- 2. CONFIGURAÇÃO SUPABASE / AMBIENTE ---
+# --- 2. CONFIGURAÇÃO SUPABASE / AMBIENTE (COM ESCOPO SEGURO) ---
+# Inicializa as variáveis no escopo global para evitar NameError
+SUPABASE_AVAILABLE = False
+PLAYWRIGHT_AVAILABLE = False
 try:
     from supabase import create_client
     SUPABASE_AVAILABLE = True
 except ImportError:
-    SUPABASE_AVAILABLE = False
+    pass
+
+try:
+    from playwright.async_api import async_playwright
+    PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+    pass
 
 def get_supabase():
+    if not SUPABASE_AVAILABLE: return None
     try:
-        from supabase import create_client
         url = st.secrets["supabase"]["url"]
         key = st.secrets["supabase"]["key"]
         return create_client(url, key)
@@ -45,7 +58,7 @@ def iniciar_banco_local():
     cur.execute('CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, nome TEXT, senha_hash TEXT, data_cadastro TEXT)')
     con.commit(); con.close()
 
-# --- 4. FUNÇÕES DE UTILIDADE E VISUALIZAÇÃO ---
+# --- UTILITÁRIOS ---
 def criar_hash(senha): return hashlib.sha256(senha.encode()).hexdigest()
 
 def validar_senha_forte(senha):
@@ -85,7 +98,50 @@ def criar_card_preco(titulo, valor, is_winner=False):
     </div>
     """
 
-# --- 5. FUNÇÕES DE DADOS ---
+# --- 4. ROBÔ DE COTAÇÃO ---
+async def executar_cotacao_agora():
+    if not PLAYWRIGHT_AVAILABLE:
+        st.error("ERRO: Playwright não está pronto. Reinicie o App para instalar dependências.")
+        return False
+
+    SEU_EMAIL = "jonathanfborato@gmail.com"
+    PROGRAMAS = {"1": "Smiles", "2": "Latam", "3": "Azul"}
+    QTD_MILHAS = "100000"
+    
+    status_text = st.empty(); bar = st.progress(0)
+    
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']); context = await browser.new_context(); page = await context.new_page()
+            steps = len(PROGRAMAS); current_step = 0
+            
+            for id_prog, nome_prog in PROGRAMAS.items():
+                status_text.text(f"🤖 Robô consultando: {nome_prog}..."); await page.goto("https://hotmilhas.com.br/", timeout=60000)
+                await page.get_by_role("textbox", name="Digite seu e-mail *").fill(SEU_EMAIL)
+                await page.get_by_role("combobox").select_option(id_prog)
+                campo_qtd = page.get_by_role("textbox", name="Quantidade de milhas *"); await campo_qtd.click(); await campo_qtd.fill(QTD_MILHAS)
+                try: await page.get_by_text("100.000", exact=True).click()
+                except: await page.keyboard.press("Enter")
+                await page.locator("#form").get_by_role("button", name="Cotar minhas milhas").click(force=True)
+                try: await page.wait_for_selector("text=R$", timeout=15000)
+                except: pass
+                texto = await page.locator("body").inner_text(); padrao = r"(?:em|Até)\s+(90)\s+dia[s]?.*?R\$\s?([\d\.,]+)"
+                match = re.search(padrao, texto, re.DOTALL | re.IGNORECASE)
+                
+                if match:
+                    valor_float = float(match.group(2).replace('.', '').replace(',', '.'))
+                    cpm = valor_float / 100
+                    con = conectar_local(); agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    con.execute('INSERT INTO historico (data_hora, email, prazo_dias, valor_total, cpm) VALUES (?, ?, ?, ?, ?)', (agora, nome_prog, 90, valor_float, cpm))
+                    con.commit(); con.close()
+                await context.clear_cookies(); current_step += 1
+                bar.progress(int((current_step / steps) * 100))
+            
+            await browser.close(); status_text.empty(); bar.empty(); return True
+    except Exception as e:
+        st.error(f"Erro ao iniciar robô: {e}"); return False
+
+# --- 5. FUNÇÕES DE DADOS (CRUD) ---
 def ler_dados_historico():
     con = conectar_local()
     try:
@@ -138,19 +194,28 @@ def pegar_ultimo_p2p(programa):
     except: pass
     return 0.0
 
-# --- FUNÇÕES DE ADMIN ---
+def ler_p2p_todos():
+    sb = get_supabase()
+    if not sb: return pd.DataFrame()
+    try:
+        res = sb.table("mercado_p2p").select("*").order("id", desc=True).limit(50).execute()
+        return pd.DataFrame(res.data)
+    except: return pd.DataFrame()
+
 def registrar_usuario(nome, email, senha, telefone):
     valida, msg = validar_senha_forte(senha)
     if not valida: return False, msg
+
     sb = get_supabase()
     if sb:
         try:
-            res = sb.table("usuarios").select("id").eq("email", email).execute()
+            res = sb.table("usuarios").select("*").eq("email", email).execute()
             if len(res.data) > 0: return False, "E-mail já existe."
             dados = {"email": email, "nome": nome, "senha_hash": criar_hash(senha), "telefone": telefone, "plano": "Free", "status": "Ativo"}
             sb.table("usuarios").insert(dados).execute()
             return True, "Conta criada! Faça login."
         except Exception as e: return False, f"Erro: {e}"
+    
     try:
         con = conectar_local()
         con.execute("INSERT INTO usuarios (email, nome, senha_hash) VALUES (?, ?, ?)", (email, nome, criar_hash(senha)))
@@ -168,6 +233,7 @@ def autenticar_usuario(email, senha):
                 u = res.data[0]
                 return {"nome": u['nome'], "plano": u.get('plano', 'Free'), "email": email}
         except: pass
+    
     con = conectar_local()
     res = con.execute("SELECT nome FROM usuarios WHERE email = ? AND senha_hash = ?", (email, h)).fetchone()
     con.close()
@@ -201,19 +267,17 @@ iniciar_banco_local()
 # --- CSS E COMPONENTES ---
 st.markdown("""
 <style>
+    /* CORREÇÃO DO LAYOUT CORTADO */
     .block-container {padding-top: 4rem !important; padding-bottom: 2rem !important;}
+    
+    /* ESTILOS DE BOTÕES E CARDS */
     div.stButton > button {width: 100%; background-color: #0E436B; color: white; border-radius: 5px; font-weight: bold;}
     div.stButton > button:hover {background-color: #082d4a; color: white;}
     div[data-testid="stImage"] {display: flex; justify-content: center; align-items: center; width: 100%;}
     
     @keyframes pulse-green { 0% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(37, 211, 102, 0); } 100% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0); } }
-    @keyframes spin-slow { 0% { transform: rotate(0deg); } 25% { transform: rotate(15deg); } 75% { transform: rotate(-15deg); } 100% { transform: rotate(0deg); } }
-    
     .price-card { background: #f8f9fa; padding: 15px; border-radius: 10px; border: 1px solid #dee2e6; text-align: center; margin-bottom: 10px; }
     .winner-pulse { border: 2px solid #25d366 !important; background: #f0fff4 !important; animation: pulse-green 2s infinite; color: #0E436B; }
-    .card-title { font-size: 0.85rem; color: #6c757d; margin-bottom: 5px; }
-    .card-value { font-size: 1.4rem; font-weight: 800; color: #212529; }
-    .winner-icon { display: inline-block; animation: spin-slow 3s infinite ease-in-out; margin-left: 5px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -381,7 +445,7 @@ def sistema_logado():
             with st.form("p2p"):
                 st.markdown("### 👑 Inserir Oferta (Admin)")
                 c1, c2 = st.columns(2)
-                g = c1.text_input("Grupo")
+                g = st.text_input("Grupo")
                 p = c2.selectbox("Prog", ["Latam", "Smiles", "Azul"])
                 val = st.number_input("Valor", 15.0)
                 obs = st.text_input("Obs")
