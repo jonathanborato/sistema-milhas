@@ -32,7 +32,7 @@ def get_supabase():
         return create_client(url, key)
     except: return None
 
-# --- 3. BANCO LOCAL (LEITURA) ---
+# --- 3. BANCO LOCAL ---
 NOME_BANCO_LOCAL = "milhas.db"
 def conectar_local(): return sqlite3.connect(NOME_BANCO_LOCAL)
 
@@ -40,9 +40,6 @@ def iniciar_banco_local():
     con = conectar_local()
     con.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
     con.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
-    con.execute('CREATE TABLE IF NOT EXISTS carteira (id INTEGER PRIMARY KEY AUTOINCREMENT, usuario_email TEXT, data_compra TEXT, programa TEXT, quantidade INTEGER, custo_total REAL, cpm_medio REAL)')
-    con.execute('CREATE TABLE IF NOT EXISTS mercado_p2p (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, grupo_nome TEXT, programa TEXT, tipo TEXT, valor REAL, observacao TEXT)')
-    con.execute('CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, nome TEXT, senha_hash TEXT, data_cadastro TEXT)')
     con.commit(); con.close()
 
 # --- UTILITÁRIOS ---
@@ -54,6 +51,7 @@ def validar_senha_forte(senha):
 
 def formatar_real(valor):
     if valor is None: return "R$ 0,00"
+    # Formatação Brasileira Manual
     s = f"{float(valor):,.2f}"
     s = s.replace(',', 'X').replace('.', ',').replace('X', '.')
     return f"R$ {s}"
@@ -137,15 +135,18 @@ def ler_dados_historico():
     return df
 
 def registrar_usuario(nome, email, senha, telefone):
+    valida, msg = validar_senha_forte(senha)
+    if not valida: return False, msg
     sb = get_supabase()
-    if not sb: return False, "Sem conexão."
-    try:
-        res = sb.table("usuarios").select("id").eq("email", email).execute()
-        if len(res.data) > 0: return False, "E-mail já cadastrado."
-        dados = {"email": email, "nome": nome, "senha_hash": hashlib.sha256(senha.encode()).hexdigest(), "telefone": telefone, "plano": "Free", "status": "Ativo"}
-        sb.table("usuarios").insert(dados).execute()
-        return True, "Conta criada!"
+    if sb:
+        try:
+            res = sb.table("usuarios").select("id").eq("email", email).execute()
+            if len(res.data) > 0: return False, "E-mail já cadastrado."
+            dados = {"email": email, "nome": nome, "senha_hash": hashlib.sha256(senha.encode()).hexdigest(), "telefone": telefone, "plano": "Free", "status": "Ativo"}
+            sb.table("usuarios").insert(dados).execute()
+            return True, "Conta criada!"
     except Exception as e: return False, f"Erro: {e}"
+    return False, "Erro conexão."
 
 def autenticar_usuario(email, senha):
     sb = get_supabase()
@@ -190,6 +191,7 @@ st.markdown("""
     div.stButton > button {width: 100%; background-color: #0E436B; color: white; border-radius: 5px; font-weight: bold;}
     div.stButton > button:hover {background-color: #082d4a; color: white;}
     div[data-testid="stImage"] {display: flex; justify-content: center; align-items: center; width: 100%;}
+    
     @keyframes pulse-green { 0% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(37, 211, 102, 0); } 100% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0); } }
     .price-card { background: #f8f9fa; padding: 15px; border-radius: 10px; border: 1px solid #dee2e6; text-align: center; margin-bottom: 10px; }
     .winner-pulse { border: 2px solid #25d366 !important; background: #f0fff4 !important; animation: pulse-green 2s infinite; color: #0E436B; }
@@ -203,6 +205,7 @@ def mostrar_paywall():
     st.error("🔒 RECURSO PRO")
     st.info("Faça o upgrade para acessar.")
 
+# --- SESSÃO ---
 if 'user' not in st.session_state: st.session_state['user'] = None
 
 # ==============================================================================
@@ -243,6 +246,7 @@ def tela_login():
 def sistema_logado():
     user = st.session_state['user']
     plano = user['plano']
+    
     sb_status = "🟢 Online" if get_supabase() else "🔴 Offline"
     opcoes = ["Dashboard (Mercado)", "Minha Carteira", "Mercado P2P", "Promoções"]
     if plano == "Admin": opcoes.append("👑 Gestão de Usuários")
@@ -267,7 +271,7 @@ def sistema_logado():
         with col_title:
             st.header("📊 Visão de Mercado")
         with col_btn:
-            if st.button("🔄 Recarregar Dados"):
+            if st.button("🔄 Atualizar"):
                 st.cache_data.clear()
                 st.rerun()
 
@@ -288,10 +292,11 @@ def sistema_logado():
                     with mc2: st.markdown(criar_card_preco("👥 P2P", val_p2p, p2p_wins), unsafe_allow_html=True)
                     st.divider()
                     if not d.empty: st.plotly_chart(plotar_grafico(d, p), use_container_width=True)
-        else: st.warning("Aguardando primeira execução do robô (GitHub Actions).")
+        else: st.warning("Aguardando robô (GitHub Actions).")
 
     # --- CARTEIRA ---
     elif menu == "Minha Carteira":
+        df_cotacoes = ler_dados_historico()
         st.header("💼 Carteira")
         if plano == "Free": mostrar_paywall()
         else:
@@ -330,7 +335,7 @@ def sistema_logado():
                     patrimonio += val_venda
                     custo_total += custo
                     
-                    view_data.append({"ID": row['id'], "Programa": row['programa'], "Qtd": f"{qtd:,.0f}".replace(',', '.'), "Custo": formatar_real(custo), "CPM Pago": formatar_real(cpm_pago), "Melhor Cotação": f"{formatar_real(melhor_preco)} ({origem})", "Lucro (Hoje)": formatar_real(lucro), "val_lucro_raw": lucro})
+                    view_data.append({"ID": row['id'], "Programa": row['programa'], "Qtd": f"{qtd:,.0f}".replace(',', '.'), "Custo": formatar_real(custo), "CPM Pago": formatar_real(cpm_pago), "Melhor Cotação": f"{formatar_real(melhor_preco)} ({origem})", "Lucro (Hoje)": formatar_real(lucro)})
                 
                 k1, k2, k3 = st.columns(3)
                 k1.metric("Total Investido", formatar_real(custo_total))
@@ -339,7 +344,12 @@ def sistema_logado():
                 k3.metric("Lucro Projetado", formatar_real(patrimonio - custo_total), delta=f"{delta_perc:.1f}%")
                 
                 st.divider()
-                st.dataframe(pd.DataFrame(view_data).style.applymap(lambda x: 'color: green' if x > 0 else 'color: red', subset=['val_lucro_raw']).drop(columns=['val_lucro_raw']), use_container_width=True)
+                # ESTILO CORRIGIDO: Colore baseado se tem sinal de menos no texto
+                def color_lucro(val):
+                    if "-" in str(val): return 'color: red; font-weight: bold;'
+                    return 'color: green; font-weight: bold;'
+
+                st.dataframe(pd.DataFrame(view_data).style.applymap(color_lucro, subset=['Lucro (Hoje)']), use_container_width=True)
                 
                 rid = st.number_input("ID para remover", step=1)
                 if st.button("🗑️ Remover Lote"): remover_carteira(rid); st.rerun()
@@ -362,7 +372,7 @@ def sistema_logado():
                     else: st.error(f"Erro: {msg}")
         else:
             if plano == "Free": mostrar_paywall(); st.stop()
-            else: st.info("ℹ️ Dados verificados.")
+            else: st.info("ℹ️ Dados verificados pela administração.")
         dfp = ler_p2p_todos()
         if not dfp.empty:
             dfp['valor'] = dfp['valor'].apply(formatar_real)
