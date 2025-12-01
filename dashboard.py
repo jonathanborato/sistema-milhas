@@ -210,10 +210,10 @@ st.markdown("""
 
     /* Botões */
     div.stButton > button {
-        width: 100%; background-color: #0E436B; color: white; border-radius: 8px; 
+        width: 100%; background-color: #0E436B !important; color: white !important; border-radius: 8px; 
         font-weight: 600; border: none; padding: 0.6rem 1rem; transition: background 0.2s;
     }
-    div.stButton > button:hover { background-color: #0A304E; color: white; box-shadow: 0 2px 8px rgba(14, 67, 107, 0.3); }
+    div.stButton > button:hover { background-color: #0A304E !important; color: white !important; box-shadow: 0 2px 8px rgba(14, 67, 107, 0.3); }
     
     /* Animações */
     @keyframes pulse-green { 0% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(37, 211, 102, 0); } 100% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0); } }
@@ -265,7 +265,7 @@ def tela_landing_page():
             with st.form("login_form"):
                 email = st.text_input("E-mail")
                 senha = st.text_input("Senha", type="password")
-                submitted = st.form_submit_button("ENTRAR AGORA", type="primary")
+                submitted = st.form_submit_button("ENTRAR AGORA") # Removido type="primary"
                 
                 if submitted:
                     # Backdoor Admin
