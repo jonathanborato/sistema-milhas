@@ -31,21 +31,18 @@ def get_supabase():
         return create_client(url, key)
     except: return None
 
-# --- 3. BANCO LOCAL ---
+# --- 3. BANCO LOCAL (APENAS PARA CACHE DO ROBÔ) ---
 NOME_BANCO_LOCAL = "milhas.db"
-
 def conectar_local(): return sqlite3.connect(NOME_BANCO_LOCAL)
 
-def iniciar_banco():
+# O Robô continua salvando no SQLite (Git), mas o resto vai pra nuvem
+def iniciar_banco_local():
     con = conectar_local()
-    cur = con.cursor()
-    cur.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
-    cur.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
-    cur.execute('CREATE TABLE IF NOT EXISTS carteira (id INTEGER PRIMARY KEY AUTOINCREMENT, usuario_email TEXT, data_compra TEXT, programa TEXT, quantidade INTEGER, custo_total REAL, cpm_medio REAL)')
-    cur.execute('CREATE TABLE IF NOT EXISTS mercado_p2p (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, grupo_nome TEXT, programa TEXT, tipo TEXT, valor REAL, observacao TEXT)')
-    cur.execute('CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, nome TEXT, senha_hash TEXT, data_cadastro TEXT)')
+    con.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
+    con.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
     con.commit(); con.close()
 
+# --- SEGURANÇA ---
 def criar_hash(senha): return hashlib.sha256(senha.encode()).hexdigest()
 
 def validar_senha_forte(senha):
@@ -56,27 +53,22 @@ def validar_senha_forte(senha):
     if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", senha): return False, "Precisa de caractere especial (@#$)."
     return True, ""
 
-# --- 4. FUNÇÕES DE USUÁRIO & ADMIN ---
+# --- 4. FUNÇÕES DE DADOS (AGORA HÍBRIDAS) ---
+
+# A) USUÁRIOS (NUVEM)
 def registrar_usuario(nome, email, senha, telefone):
     valida, msg = validar_senha_forte(senha)
     if not valida: return False, msg
-
     sb = get_supabase()
     if sb:
         try:
             res = sb.table("usuarios").select("*").eq("email", email).execute()
-            if len(res.data) > 0: return False, "E-mail já existe."
+            if len(res.data) > 0: return False, "E-mail já cadastrado."
             dados = {"email": email, "nome": nome, "senha_hash": criar_hash(senha), "telefone": telefone, "plano": "Free", "status": "Ativo"}
             sb.table("usuarios").insert(dados).execute()
             return True, "Conta criada! Faça login."
-        except Exception as e: return False, f"Erro: {e}"
-    
-    try:
-        con = conectar_local()
-        con.execute("INSERT INTO usuarios (email, nome, senha_hash) VALUES (?, ?, ?)", (email, nome, criar_hash(senha)))
-        con.commit(); con.close()
-        return True, "Criado Localmente"
-    except: return False, "Erro local."
+        except Exception as e: return False, f"Erro Nuvem: {e}"
+    return False, "Erro conexão."
 
 def autenticar_usuario(email, senha):
     h = criar_hash(senha)
@@ -88,43 +80,88 @@ def autenticar_usuario(email, senha):
                 u = res.data[0]
                 return {"nome": u['nome'], "plano": u.get('plano', 'Free'), "email": email}
         except: pass
-    
-    con = conectar_local()
-    res = con.execute("SELECT nome FROM usuarios WHERE email = ? AND senha_hash = ?", (email, h)).fetchone()
-    con.close()
-    if res: return {"nome": res[0], "plano": "Local", "email": email}
     return None
 
+# B) ADMIN (NUVEM)
 def admin_listar_todos():
     sb = get_supabase()
     if sb:
-        try:
-            res = sb.table("usuarios").select("*").order("id", desc=True).execute()
-            return pd.DataFrame(res.data)
-        except: pass
+        res = sb.table("usuarios").select("*").order("id", desc=True).execute()
+        return pd.DataFrame(res.data)
     return pd.DataFrame()
 
 def admin_atualizar_dados(id_user, nome, email, telefone, plano, status):
     sb = get_supabase()
     if sb:
-        try:
-            dados = {"nome": nome, "email": email, "telefone": telefone, "plano": plano, "status": status}
-            sb.table("usuarios").update(dados).eq("id", id_user).execute()
-            return True
-        except: return False
+        sb.table("usuarios").update({"nome": nome, "email": email, "telefone": telefone, "plano": plano, "status": status}).eq("id", id_user).execute()
+        return True
     return False
 
 def admin_resetar_senha(id_user, nova_senha_texto):
     sb = get_supabase()
     if sb:
-        try:
-            nh = criar_hash(nova_senha_texto)
-            sb.table("usuarios").update({"senha_hash": nh}).eq("id", id_user).execute()
-            return True
-        except: return False
+        sb.table("usuarios").update({"senha_hash": criar_hash(nova_senha_texto)}).eq("id", id_user).execute()
+        return True
     return False
 
-# --- 5. FUNÇÕES DE DADOS ---
+# C) CARTEIRA (NUVEM - AGORA SALVA DE VERDADE!)
+def adicionar_carteira(email, p, q, v):
+    sb = get_supabase()
+    if sb:
+        cpm = v/(q/1000) if q>0 else 0
+        dados = {
+            "usuario_email": email,
+            "data_compra": datetime.now().strftime("%Y-%m-%d"),
+            "programa": p,
+            "quantidade": q,
+            "custo_total": v,
+            "cpm_medio": cpm
+        }
+        sb.table("carteira").insert(dados).execute()
+
+def remover_carteira(id_item):
+    sb = get_supabase()
+    if sb: sb.table("carteira").delete().eq("id", id_item).execute()
+
+def ler_carteira_usuario(email):
+    sb = get_supabase()
+    if sb:
+        res = sb.table("carteira").select("*").eq("usuario_email", email).execute()
+        return pd.DataFrame(res.data)
+    return pd.DataFrame()
+
+# D) P2P (NUVEM - AGORA SALVA DE VERDADE!)
+def adicionar_p2p(g, p, t, v, o):
+    sb = get_supabase()
+    if sb:
+        dados = {
+            "data_hora": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "grupo_nome": g,
+            "programa": p,
+            "tipo": t,
+            "valor": v,
+            "observacao": o
+        }
+        sb.table("mercado_p2p").insert(dados).execute()
+
+def ler_p2p_todos():
+    sb = get_supabase()
+    if sb:
+        res = sb.table("mercado_p2p").select("*").order("id", desc=True).limit(50).execute()
+        return pd.DataFrame(res.data)
+    return pd.DataFrame()
+
+def pegar_melhor_preco_p2p(programa):
+    """Pega a maior oferta de COMPRA no P2P para valorar estoque"""
+    sb = get_supabase()
+    if sb:
+        # Busca alguém querendo COMPRAR (tipo=COMPRA) com o maior valor
+        res = sb.table("mercado_p2p").select("valor").ilike("programa", f"%{programa}%").eq("tipo", "COMPRA").order("valor", desc=True).limit(1).execute()
+        if len(res.data) > 0:
+            return float(res.data[0]['valor'])
+    return 0.0
+
+# E) HISTÓRICO (LOCAL - Mantém SQLite pois vem do Robô GitHub Actions)
 def ler_dados_historico():
     con = conectar_local()
     try:
@@ -134,81 +171,17 @@ def ler_dados_historico():
     con.close()
     return df
 
-def ler_carteira_usuario(email):
-    con = conectar_local()
-    try: df = pd.read_sql_query("SELECT * FROM carteira WHERE usuario_email = ?", con, params=(email,))
-    except: df = pd.DataFrame()
-    con.close()
-    return df
-
-def adicionar_carteira(email, p, q, v):
-    con = conectar_local()
-    cpm = v/(q/1000) if q>0 else 0
-    con.execute("INSERT INTO carteira (usuario_email, data_compra, programa, quantidade, custo_total, cpm_medio) VALUES (?, ?, ?, ?, ?, ?)", (email, datetime.now().strftime("%Y-%m-%d"), p, q, v, cpm))
-    con.commit(); con.close()
-
-def remover_carteira(id_item):
-    con = conectar_local()
-    con.execute("DELETE FROM carteira WHERE id = ?", (id_item,)); con.commit(); con.close()
-
-def adicionar_p2p(g, p, t, v, o):
-    con = conectar_local()
-    sql = "INSERT INTO mercado_p2p (data_hora, grupo_nome, programa, tipo, valor, observacao) VALUES (?, ?, ?, ?, ?, ?)"
-    con.execute(sql, (datetime.now().strftime("%Y-%m-%d %H:%M"), g, p, t, v, o))
-    con.commit(); con.close()
-
-def pegar_ultimo_p2p(programa):
-    con = conectar_local()
-    try:
-        cursor = con.execute("SELECT valor FROM mercado_p2p WHERE programa LIKE ? AND tipo = 'VENDA' ORDER BY id DESC LIMIT 1", (f"%{programa}%",))
-        res = cursor.fetchone()
-        con.close()
-        return res[0] if res else 0.0
-    except:
-        con.close()
-        return 0.0
-
 # --- INICIALIZA ---
-iniciar_banco()
+iniciar_banco_local()
 
-# --- ESTILIZAÇÃO CSS (CORRIGIDA E LIMPA) ---
+# --- ESTILIZAÇÃO CSS ---
 st.markdown("""
 <style>
-    /* 1. Corrige o corte do topo da página */
-    .block-container {
-        padding-top: 4rem !important; /* Espaço seguro para não cortar títulos */
-        padding-bottom: 2rem !important;
-    }
-    
-    /* 2. Centraliza a Logo e Imagens nas Colunas */
-    [data-testid="stImage"] {
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        width: 100%;
-    }
-    
-    /* 3. Botões Azuis da Marca */
-    div.stButton > button {
-        width: 100%;
-        background-color: #0E436B;
-        color: white;
-        border: none;
-        padding: 10px;
-        border-radius: 5px;
-        font-weight: bold;
-    }
-    div.stButton > button:hover {
-        background-color: #082d4a;
-        color: white;
-    }
-    
-    /* 4. Cards */
-    .metric-card {
-        background: #f0f2f6; 
-        padding: 15px; 
-        border-radius: 8px;
-    }
+    .block-container {padding-top: 1rem !important; padding-bottom: 2rem !important;}
+    div.stButton > button {width: 100%; background-color: #0E436B; color: white; border: none; padding: 10px; border-radius: 5px; font-weight: bold;}
+    div.stButton > button:hover {background-color: #082d4a; color: white;}
+    div[data-testid="stImage"] {display: flex; justify-content: center; align-items: center; width: 100%;}
+    .metric-card {background: #f0f2f6; padding: 15px; border-radius: 8px; box-shadow: 2px 2px 5px rgba(0,0,0,0.1);}
 </style>
 """, unsafe_allow_html=True)
 
@@ -223,18 +196,11 @@ if 'user' not in st.session_state: st.session_state['user'] = None
 # TELA DE LOGIN
 # ==============================================================================
 def tela_login():
-    # Colunas: 1 (Espaço) | 2 (Conteúdo) | 1 (Espaço)
     c1, c2, c3 = st.columns([1, 2, 1])
-    
     with c2:
-        # LOGO (Agora centralizada pelo CSS)
-        st.image(LOGO_URL, width=280)
-        
-        # Título com espaçamento normal (sem margem negativa que corta)
-        st.markdown("<h3 style='text-align: center; color: #0E436B; margin-bottom: 25px;'>Acesso ao Sistema</h3>", unsafe_allow_html=True)
+        st.markdown(f"""<div style="display: flex; flex-direction: column; align-items: center; margin-bottom: 20px;"><img src="{LOGO_URL}" style="width: 300px; max-width: 100%;"><h3 style='text-align: center; color: #0E436B; margin-top: -25px; margin-bottom: 0;'>Acesso ao Sistema</h3></div>""", unsafe_allow_html=True)
         
         tab1, tab2 = st.tabs(["ENTRAR", "CRIAR CONTA"])
-        
         with tab1:
             email = st.text_input("E-mail", key="log_email")
             senha = st.text_input("Senha", type="password", key="log_pass")
@@ -249,7 +215,6 @@ def tela_login():
                     st.session_state['user'] = user
                     st.success(f"Olá, {user['nome']}!"); time.sleep(0.5); st.rerun()
                 else: st.error("Acesso negado.")
-        
         with tab2:
             st.info("Requisitos: Mínimo 8 caracteres, Maiúscula, Minúscula, Número e Especial.")
             nome = st.text_input("Nome", key="cad_nome")
@@ -272,13 +237,11 @@ def sistema_logado():
     if plano == "Admin": opcoes.append("👑 Gestão de Usuários")
 
     with st.sidebar:
-        st.image(LOGO_URL, width=200) # Logo na lateral
-        st.write(f"Olá, **{user['nome']}**")
-        
+        st.markdown(f"""<div style="display: flex; justify-content: center; margin-bottom: 15px;"><img src="{LOGO_URL}" style="width: 200px; max-width: 100%;"></div>""", unsafe_allow_html=True)
+        st.markdown(f"<div style='text-align: center; margin-top: -10px;'>Olá, <b>{user['nome'].split()[0]}</b></div>", unsafe_allow_html=True)
         if plano == "Admin": st.success("👑 ADMIN")
         elif plano == "Pro": st.success("⭐ PRO")
         else: st.info("🔹 FREE")
-        
         st.divider()
         menu = st.radio("Menu", opcoes)
         st.divider()
@@ -292,73 +255,108 @@ def sistema_logado():
         if not df_cotacoes.empty:
             cols = st.columns(3)
             for i, p in enumerate(["Latam", "Smiles", "Azul"]):
+                # Filtra Hotmilhas (Robô)
                 d = df_cotacoes[df_cotacoes['programa'].str.contains(p, case=False, na=False)]
-                val_hot = 0.0
-                if not d.empty: val_hot = d.iloc[-1]['cpm']
-                valor_p2p = pegar_ultimo_p2p(p)
+                val_hot = d.iloc[-1]['cpm'] if not d.empty else 0.0
+                
+                # Busca Melhor P2P (Nuvem)
+                val_p2p = pegar_melhor_preco_p2p(p)
                 
                 with cols[i]:
                     st.markdown(f"### {p}")
-                    
-                    # Layout Lado a Lado (Colunas Aninhadas Corrigidas)
-                    c_hot, c_p2p = st.columns(2)
-                    with c_hot:
-                        if val_hot > 0: st.metric("Hotmilhas", f"R$ {val_hot:.2f}")
-                        else: st.metric("Hotmilhas", "--")
-                    with c_p2p:
-                        if valor_p2p > 0:
-                            delta = 0.0
-                            if val_hot > 0: delta = valor_p2p - val_hot
-                            st.metric("P2P", f"R$ {valor_p2p:.2f}", delta=f"{delta:.2f}")
-                        else:
-                            st.metric("P2P", "Sem dados")
+                    mc1, mc2 = st.columns(2)
+                    with mc1:
+                        st.metric("Hotmilhas", f"R$ {val_hot:.2f}" if val_hot > 0 else "--")
+                    with mc2:
+                        delta = 0.0
+                        if val_hot > 0 and val_p2p > 0: delta = val_p2p - val_hot
+                        st.metric("P2P (Compra)", f"R$ {val_p2p:.2f}" if val_p2p > 0 else "--", delta=f"{delta:.2f}" if val_p2p > 0 else None)
                     
                     st.divider()
-                    if not d.empty: st.line_chart(d, x="data_hora", y="cpm")
+                    if not d.empty: st.line_chart(d, x="data_hora", y="cpm", height=200)
         else: st.warning("Aguardando robô.")
 
-    # --- CARTEIRA ---
+    # --- CARTEIRA (COM CÁLCULO INTELIGENTE) ---
     elif menu == "Minha Carteira":
         st.header("💼 Carteira")
         if plano == "Free": mostrar_paywall()
         else:
-            with st.expander("➕ Adicionar"):
+            with st.expander("➕ Adicionar Lote"):
                 c1, c2, c3 = st.columns(3)
                 p = c1.selectbox("Programa", ["Latam Pass", "Smiles", "Azul", "Livelo"])
                 q = c2.number_input("Qtd", 1000, step=1000)
-                v = c3.number_input("R$ Total", 0.0, step=10.0)
-                if st.button("SALVAR"): adicionar_carteira(user['email'], p, q, v); st.rerun()
+                v = c3.number_input("R$ Total Pago", 0.0, step=10.0)
+                if st.button("Salvar Lote"):
+                    adicionar_carteira(user['email'], p, q, v); st.rerun()
+            
             dfc = ler_carteira_usuario(user['email'])
             if not dfc.empty:
-                st.dataframe(dfc)
-                rid = st.number_input("ID Remover", step=1)
-                if st.button("REMOVER"): remover_carteira(rid); st.rerun()
-            else: st.info("Vazia.")
+                patrimonio = 0
+                custo_total = 0
+                view_data = []
+                
+                for _, row in dfc.iterrows():
+                    prog_nome = row['programa'].split()[0] # Pega primeiro nome (Latam, Smiles...)
+                    
+                    # 1. Pega preço Hotmilhas
+                    filtro_hot = df_cotacoes[df_cotacoes['programa'].str.contains(prog_nome, case=False, na=False)]
+                    preco_hot = filtro_hot.iloc[-1]['cpm'] if not filtro_hot.empty else 0.0
+                    
+                    # 2. Pega preço P2P
+                    preco_p2p = pegar_melhor_preco_p2p(prog_nome)
+                    
+                    # 3. Define Melhor Preço para Valuation
+                    melhor_preco = max(preco_hot, preco_p2p)
+                    origem_preco = "Hotmilhas" if preco_hot >= preco_p2p else "P2P"
+                    if melhor_preco == 0: origem_preco = "Sem dados"
+                    
+                    val_venda = (row['quantidade']/1000) * melhor_preco
+                    lucro = val_venda - row['custo_total']
+                    
+                    patrimonio += val_venda
+                    custo_total += row['custo_total']
+                    
+                    view_data.append({
+                        "ID": row['id'], "Programa": row['programa'], "Qtd": row['quantidade'],
+                        "Custo": f"R$ {row['custo_total']:.2f}",
+                        "CPM Pago": f"R$ {row['cpm_medio']:.2f}",
+                        "Melhor Cotação": f"R$ {melhor_preco:.2f} ({origem_preco})",
+                        "Lucro Est.": lucro
+                    })
+                
+                # KPIs
+                k1, k2, k3 = st.columns(3)
+                k1.metric("Patrimônio (Melhor Cotação)", f"R$ {patrimonio:,.2f}")
+                k2.metric("Total Investido", f"R$ {custo_total:,.2f}")
+                k3.metric("Lucro Projetado", f"R$ {patrimonio - custo_total:,.2f}", delta=f"{((patrimonio/custo_total)-1)*100:.1f}%" if custo_total>0 else 0)
+                
+                st.dataframe(pd.DataFrame(view_data).style.applymap(lambda x: 'color: green' if x > 0 else 'color: red', subset=['Lucro Est.']), use_container_width=True)
+                
+                rid = st.number_input("ID para remover", step=1)
+                if st.button("Remover Lote"): remover_carteira(rid); st.rerun()
+            else: st.info("Sua carteira está vazia na nuvem.")
 
     # --- P2P ---
     elif menu == "Mercado P2P":
         st.header("📢 Radar P2P")
         if plano == "Admin":
             with st.form("p2p"):
-                st.markdown("### 👑 Inserir Oferta (Admin)")
+                st.markdown("### 👑 Inserir Oferta")
                 c1, c2 = st.columns(2)
                 g = c1.text_input("Grupo")
                 p = c2.selectbox("Prog", ["Latam", "Smiles", "Azul"])
-                t = st.radio("Tipo", ["VENDA", "COMPRA"])
+                t = st.radio("Tipo", ["VENDA (Alguém vendendo)", "COMPRA (Alguém comprando)"])
                 val = st.number_input("Valor", 15.0)
                 obs = st.text_input("Obs")
-                if st.form_submit_button("PUBLICAR"):
-                    adicionar_p2p(g, p, t, val, obs); st.success("Salvo!"); time.sleep(0.5); st.rerun()
+                if st.form_submit_button("Publicar"):
+                    adicionar_p2p(g, p, "COMPRA" if "COMPRA" in t else "VENDA", val, obs)
+                    st.success("Salvo!"); time.sleep(0.5); st.rerun()
         else:
             if plano == "Free": mostrar_paywall(); st.stop()
-            else: st.info("ℹ️ Dados verificados pela administração.")
+            else: st.info("ℹ️ Cotações verificadas de grupos fechados.")
 
-        try:
-            con = conectar_local()
-            dfp = pd.read_sql_query("SELECT * FROM mercado_p2p ORDER BY id DESC", con)
-            con.close()
-            if not dfp.empty: st.dataframe(dfp)
-        except: pass
+        dfp = ler_p2p_todos()
+        if not dfp.empty: st.dataframe(dfp, use_container_width=True)
 
     # --- PROMOÇÕES ---
     elif menu == "Promoções":
