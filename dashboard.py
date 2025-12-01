@@ -4,6 +4,7 @@ import sqlite3
 import hashlib
 import time
 import re
+import plotly.express as px
 from datetime import datetime
 
 # --- 1. CONFIGURAÇÃO INICIAL ---
@@ -16,7 +17,7 @@ st.set_page_config(
 
 LOGO_URL = "https://raw.githubusercontent.com/jonathanborato/sistema-milhas/main/logo.png"
 
-# --- 2. CONFIGURAÇÃO SUPABASE / AMBIENTE ---
+# --- 2. CONFIGURAÇÃO SUPABASE ---
 try:
     from supabase import create_client
     SUPABASE_AVAILABLE = True
@@ -24,6 +25,7 @@ except ImportError:
     SUPABASE_AVAILABLE = False
 
 def get_supabase():
+    if not SUPABASE_AVAILABLE: return None
     try:
         url = st.secrets["supabase"]["url"]
         key = st.secrets["supabase"]["key"]
@@ -36,49 +38,29 @@ def conectar_local(): return sqlite3.connect(NOME_BANCO_LOCAL)
 
 def iniciar_banco_local():
     con = conectar_local()
-    cur = con.cursor()
-    cur.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
-    cur.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
-    cur.execute('CREATE TABLE IF NOT EXISTS carteira (id INTEGER PRIMARY KEY AUTOINCREMENT, usuario_email TEXT, data_compra TEXT, programa TEXT, quantidade INTEGER, custo_total REAL, cpm_medio REAL)')
-    cur.execute('CREATE TABLE IF NOT EXISTS mercado_p2p (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, grupo_nome TEXT, programa TEXT, tipo TEXT, valor REAL, observacao TEXT)')
-    cur.execute('CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, nome TEXT, senha_hash TEXT, data_cadastro TEXT)')
+    con.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
+    con.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
     con.commit(); con.close()
 
-# --- 4. FUNÇÕES DE UTILIDADE E VISUALIZAÇÃO ---
+# ==============================================================================
+# 4. FUNÇÕES AUXILIARES (ORGANIZADAS NO TOPO PARA NÃO DAR ERRO)
+# ==============================================================================
+
 def criar_hash(senha): return hashlib.sha256(senha.encode()).hexdigest()
 
 def validar_senha_forte(senha):
     if len(senha) < 8: return False, "Mínimo 8 caracteres."
-    if not re.search(r"[a-z]", senha): return False, "Precisa de letra minúscula."
-    if not re.search(r"[A-Z]", senha): return False, "Precisa de letra maiúscula."
-    if not re.search(r"[0-9]", senha): return False, "Precisa de número."
-    if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", senha): return False, "Precisa de caractere especial (@#$)."
     return True, ""
 
 def formatar_real(valor):
-    if valor is None: return "R$ 0,00"
-    s = f"{float(valor):,.2f}"
-    s = s.replace(',', 'X').replace('.', ',').replace('X', '.')
-    return f"R$ {s}"
-
-def plotar_grafico(df, programa):
-    # Se não tiver plotly (pra evitar erro se não instalou), retorna nada
+    if valor is None or valor == 0: return "R$ 0,00"
     try:
-        import plotly.express as px
-        cor = "#0E436B"
-        if "Latam" in programa: cor = "#E30613"
-        elif "Smiles" in programa: cor = "#FF7000"
-        elif "Azul" in programa: cor = "#00AEEF"
-        
-        fig = px.area(df, x="data_hora", y="cpm", markers=True)
-        fig.update_traces(line_color=cor, fillcolor=cor, marker=dict(size=6, color="white", line=dict(width=2, color=cor)))
-        fig.update_layout(height=250, margin=dict(l=0, r=0, t=10, b=0), xaxis_title=None, yaxis_title=None, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", yaxis=dict(showgrid=True, gridcolor='#f0f0f0'), xaxis=dict(showgrid=False), showlegend=False)
-        return fig
-    except:
-        st.line_chart(df, x="data_hora", y="cpm")
-        return None
+        s = f"{float(valor):,.2f}"
+        return f"R$ {s.replace(',', 'X').replace('.', ',').replace('X', '.')}"
+    except: return "R$ 0,00"
 
 def criar_card_preco(titulo, valor, is_winner=False):
+    """Gera o HTML do card de preço com ou sem animação"""
     valor_fmt = formatar_real(valor) if valor > 0 else "--"
     css_class = "price-card winner-pulse" if is_winner and valor > 0 else "price-card"
     icon_html = '<span class="winner-icon">🏆</span>' if is_winner and valor > 0 else ""
@@ -90,41 +72,32 @@ def criar_card_preco(titulo, valor, is_winner=False):
     </div>
     """
 
-# --- 5. FUNÇÕES DE DADOS ---
-def ler_dados_historico():
-    con = conectar_local()
-    try:
-        df = pd.read_sql_query("SELECT * FROM historico ORDER BY data_hora ASC", con)
-        if 'email' in df.columns: df = df.rename(columns={'email': 'programa'})
-        if not df.empty: df['data_hora'] = pd.to_datetime(df['data_hora'], errors='coerce')
-    except: df = pd.DataFrame()
-    con.close()
-    return df
+def plotar_grafico(df, programa):
+    """Gera o gráfico moderno usando Plotly"""
+    cor = "#0E436B"
+    if "Latam" in programa: cor = "#E30613"
+    elif "Smiles" in programa: cor = "#FF7000"
+    elif "Azul" in programa: cor = "#00AEEF"
+    
+    if df.empty: return None
+    
+    fig = px.area(df, x="data_hora", y="cpm", markers=True)
+    fig.update_traces(line_color=cor, fillcolor=cor, marker=dict(size=6, color="white", line=dict(width=2, color=cor)))
+    fig.update_layout(
+        height=250, 
+        margin=dict(l=0, r=0, t=10, b=0),
+        xaxis_title=None, yaxis_title=None,
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        yaxis=dict(showgrid=True, gridcolor='#f0f0f0'), xaxis=dict(showgrid=False),
+        showlegend=False
+    )
+    return fig
 
-def ler_carteira_usuario(email):
-    sb = get_supabase()
-    if not sb: return pd.DataFrame()
-    try:
-        res = sb.table("carteira").select("*").eq("usuario_email", email).execute()
-        return pd.DataFrame(res.data)
-    except: return pd.DataFrame()
+# ==============================================================================
+# 5. FUNÇÕES DE DADOS (CRUD)
+# ==============================================================================
 
-def adicionar_carteira(email, p, q, v):
-    sb = get_supabase()
-    if not sb: return False, "Erro conexão."
-    try:
-        cpm = v/(q/1000) if q>0 else 0
-        dados = {"usuario_email": email, "data_compra": datetime.now().strftime("%Y-%m-%d"), "programa": p, "quantidade": q, "custo_total": v, "cpm_medio": cpm}
-        sb.table("carteira").insert(dados).execute()
-        return True, "Sucesso"
-    except Exception as e: return False, str(e)
-
-def remover_carteira(id_item):
-    sb = get_supabase()
-    if sb: 
-        try: sb.table("carteira").delete().eq("id", id_item).execute()
-        except: pass
-
+# A) P2P
 def adicionar_p2p(g, p, t, v, o):
     sb = get_supabase()
     if not sb: return False, "Erro de conexão."
@@ -133,6 +106,14 @@ def adicionar_p2p(g, p, t, v, o):
         sb.table("mercado_p2p").insert(dados).execute()
         return True, "Sucesso"
     except Exception as e: return False, str(e)
+
+def ler_p2p_todos():
+    sb = get_supabase()
+    if not sb: return pd.DataFrame()
+    try:
+        res = sb.table("mercado_p2p").select("*").order("id", desc=True).limit(50).execute()
+        return pd.DataFrame(res.data)
+    except: return pd.DataFrame()
 
 def pegar_ultimo_p2p(programa):
     sb = get_supabase()
@@ -143,7 +124,44 @@ def pegar_ultimo_p2p(programa):
     except: pass
     return 0.0
 
-# --- FUNÇÕES DE ADMIN ---
+# B) CARTEIRA
+def adicionar_carteira(email, p, q, v):
+    sb = get_supabase()
+    if not sb: return False, "Erro conexão."
+    try:
+        cpm = float(v) / (float(q) / 1000) if float(q) > 0 else 0
+        dados = {"usuario_email": email, "data_compra": datetime.now().strftime("%Y-%m-%d"), "programa": p, "quantidade": int(q), "custo_total": float(v), "cpm_medio": cpm}
+        sb.table("carteira").insert(dados).execute()
+        return True, "Sucesso"
+    except Exception as e: return False, str(e)
+
+def remover_carteira(id_item):
+    sb = get_supabase()
+    if sb: 
+        try: sb.table("carteira").delete().eq("id", id_item).execute()
+        except: pass
+
+def ler_carteira_usuario(email):
+    sb = get_supabase()
+    if not sb: return pd.DataFrame()
+    try:
+        res = sb.table("carteira").select("*").eq("usuario_email", email).execute()
+        return pd.DataFrame(res.data)
+    except: return pd.DataFrame()
+
+# C) HISTÓRICO (CACHE)
+@st.cache_data(ttl=60)
+def ler_dados_historico():
+    con = conectar_local()
+    try:
+        df = pd.read_sql_query("SELECT * FROM historico ORDER BY data_hora ASC", con)
+        if 'email' in df.columns: df = df.rename(columns={'email': 'programa'})
+        if not df.empty: df['data_hora'] = pd.to_datetime(df['data_hora'], errors='coerce')
+    except: df = pd.DataFrame()
+    con.close()
+    return df
+
+# D) LOGIN
 def registrar_usuario(nome, email, senha, telefone):
     valida, msg = validar_senha_forte(senha)
     if not valida: return False, msg
@@ -152,31 +170,22 @@ def registrar_usuario(nome, email, senha, telefone):
         try:
             res = sb.table("usuarios").select("id").eq("email", email).execute()
             if len(res.data) > 0: return False, "E-mail já existe."
-            dados = {"email": email, "nome": nome, "senha_hash": criar_hash(senha), "telefone": telefone, "plano": "Free", "status": "Ativo"}
+            dados = {"email": email, "nome": nome, "senha_hash": hashlib.sha256(senha.encode()).hexdigest(), "telefone": telefone, "plano": "Free", "status": "Ativo"}
             sb.table("usuarios").insert(dados).execute()
-            return True, "Conta criada! Faça login."
+            return True, "Conta criada!"
         except Exception as e: return False, f"Erro: {e}"
-    try:
-        con = conectar_local()
-        con.execute("INSERT INTO usuarios (email, nome, senha_hash) VALUES (?, ?, ?)", (email, nome, criar_hash(senha)))
-        con.commit(); con.close()
-        return True, "Criado Localmente"
-    except: return False, "Erro local."
+    return False, "Erro conexão."
 
 def autenticar_usuario(email, senha):
-    h = criar_hash(senha)
     sb = get_supabase()
-    if sb:
-        try:
-            res = sb.table("usuarios").select("*").eq("email", email).eq("senha_hash", h).execute()
-            if len(res.data) > 0:
-                u = res.data[0]
-                return {"nome": u['nome'], "plano": u.get('plano', 'Free'), "email": email}
-        except: pass
-    con = conectar_local()
-    res = con.execute("SELECT nome FROM usuarios WHERE email = ? AND senha_hash = ?", (email, h)).fetchone()
-    con.close()
-    if res: return {"nome": res[0], "plano": "Local", "email": email}
+    if not sb: return None
+    try:
+        h = hashlib.sha256(senha.encode()).hexdigest()
+        res = sb.table("usuarios").select("*").eq("email", email).eq("senha_hash", h).execute()
+        if len(res.data) > 0:
+            u = res.data[0]
+            return {"nome": u['nome'], "plano": u.get('plano', 'Free'), "email": email}
+    except: pass
     return None
 
 def admin_listar_todos():
@@ -200,10 +209,10 @@ def admin_resetar_senha(id_user, nova_senha_texto):
         return True
     return False
 
-# --- 7. INICIALIZAÇÃO E FLUXO ---
+# --- INICIALIZA ---
 iniciar_banco_local()
 
-# --- CSS E COMPONENTES ---
+# --- CSS ---
 st.markdown("""
 <style>
     .block-container {padding-top: 4rem !important; padding-bottom: 2rem !important;}
@@ -237,7 +246,6 @@ def tela_login():
     with c2:
         st.markdown(f"""<div style="display: flex; flex-direction: column; align-items: center; margin-bottom: 20px;"><img src="{LOGO_URL}" style="width: 300px; max-width: 100%;"><h3 style='text-align: center; color: #0E436B; margin-top: -30px; margin-bottom: 0;'>Acesso ao Sistema</h3></div>""", unsafe_allow_html=True)
         tab1, tab2 = st.tabs(["ENTRAR", "CRIAR CONTA"])
-        
         with tab1:
             email = st.text_input("E-mail", key="log_email")
             senha = st.text_input("Senha", type="password", key="log_pass")
@@ -250,9 +258,8 @@ def tela_login():
                 user = autenticar_usuario(email, senha)
                 if user:
                     st.session_state['user'] = user
-                    st.success(f"Olá, {user['nome']}!"); time.sleep(0.5); st.rerun()
+                    st.success("Login OK!"); time.sleep(0.5); st.rerun()
                 else: st.error("Acesso negado.")
-        
         with tab2:
             nome = st.text_input("Nome", key="cad_nome")
             email_c = st.text_input("E-mail", key="cad_mail")
@@ -278,11 +285,9 @@ def sistema_logado():
         st.markdown(f"""<div style="display: flex; justify-content: center; margin-bottom: 15px;"><img src="{LOGO_URL}" style="width: 200px; max-width: 100%;"></div>""", unsafe_allow_html=True)
         st.markdown(f"<div style='text-align: center; margin-top: -10px;'>Olá, <b>{user['nome'].split()[0]}</b></div>", unsafe_allow_html=True)
         st.caption(f"Nuvem: {sb_status}")
-        
         if plano == "Admin": st.success("👑 ADMIN")
         elif plano == "Pro": st.success("⭐ PRO")
         else: st.info("🔹 FREE")
-        
         st.divider()
         menu = st.radio("Menu", opcoes)
         st.divider()
@@ -292,15 +297,13 @@ def sistema_logado():
 
     # --- DASHBOARD ---
     if menu == "Dashboard (Mercado)":
-        col_title, col_btn = st.columns([3, 1])
-        with col_title:
-            st.header("📊 Visão de Mercado")
-            # Mostra a última atualização do banco
-            if not df_cotacoes.empty:
-                ult_data = df_cotacoes.iloc[-1]['data_hora']
-                st.caption(f"Última atualização do robô: {ult_data}")
-
+        st.header("📊 Visão de Mercado")
+        
         if not df_cotacoes.empty:
+            # Mostra a data da última atualização
+            ult_data = df_cotacoes.iloc[-1]['data_hora']
+            st.caption(f"Última atualização do robô: {ult_data}")
+            
             cols = st.columns(3)
             for i, p in enumerate(["Latam", "Smiles", "Azul"]):
                 d = df_cotacoes[df_cotacoes['programa'].str.contains(p, case=False, na=False)]
@@ -317,13 +320,10 @@ def sistema_logado():
                     with mc2: st.markdown(criar_card_preco("👥 P2P", val_p2p, p2p_wins), unsafe_allow_html=True)
                     st.divider()
                     if not d.empty: st.plotly_chart(plotar_grafico(d, p), use_container_width=True)
-        else:
-            st.warning("Aguardando primeira execução do robô (GitHub Actions).")
-            st.info("O Robô está configurado para rodar automaticamente no servidor. Os dados aparecerão aqui em breve.")
+        else: st.warning("Aguardando dados do robô (GitHub Actions).")
 
     # --- CARTEIRA ---
     elif menu == "Minha Carteira":
-        df_cotacoes = ler_dados_historico()
         st.header("💼 Carteira")
         if plano == "Free": mostrar_paywall()
         else:
