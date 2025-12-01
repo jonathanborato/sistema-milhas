@@ -4,7 +4,7 @@ import sqlite3
 import hashlib
 import time
 import re
-import plotly.express as px # BIBLIOTECA DE GRÁFICOS MODERNOS
+import plotly.express as px # GRÁFICOS MODERNOS
 from datetime import datetime
 
 # --- 1. CONFIGURAÇÃO INICIAL ---
@@ -47,6 +47,10 @@ def criar_hash(senha): return hashlib.sha256(senha.encode()).hexdigest()
 
 def validar_senha_forte(senha):
     if len(senha) < 8: return False, "Mínimo 8 caracteres."
+    if not re.search(r"[a-z]", senha): return False, "Precisa de letra minúscula."
+    if not re.search(r"[A-Z]", senha): return False, "Precisa de letra maiúscula."
+    if not re.search(r"[0-9]", senha): return False, "Precisa de número."
+    if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", senha): return False, "Precisa de caractere especial (@#$)."
     return True, ""
 
 def formatar_real(valor):
@@ -55,50 +59,27 @@ def formatar_real(valor):
     s = s.replace(',', 'X').replace('.', ',').replace('X', '.')
     return f"R$ {s}"
 
-# --- FUNÇÃO DE GRÁFICO MODERNO (PLOTLY) ---
-def plotar_grafico_moderno(df, programa):
-    if df.empty: return None
+# --- FUNÇÃO DE GRÁFICO (PLOTLY) ---
+def plotar_grafico(df, programa):
+    # Cores Oficiais das Companhias
+    cor = "#0E436B" # Padrão
+    if "Latam" in programa: cor = "#E30613" # Vermelho
+    elif "Smiles" in programa: cor = "#FF7000" # Laranja
+    elif "Azul" in programa: cor = "#00AEEF" # Azul
     
-    # Define cor baseada na marca
-    cor_marca = "#0E436B" # Padrão Azul
-    if "Latam" in programa: cor_marca = "#E30613" # Vermelho Latam
-    elif "Smiles" in programa: cor_marca = "#FF7000" # Laranja Smiles
-    elif "Azul" in programa: cor_marca = "#00AEEF" # Azul Claro
+    fig = px.area(df, x="data_hora", y="cpm", markers=True)
+    fig.update_traces(line_color=cor, fillcolor=cor, marker=dict(size=6, color="white", line=dict(width=2, color=cor)))
     
-    # Cria o gráfico de área
-    fig = px.area(
-        df, 
-        x="data_hora", 
-        y="cpm",
-        title=None,
-        markers=True,
-    )
-    
-    # Estilização Profissional (Fintech Style)
-    fig.update_traces(
-        line_color=cor_marca,
-        marker=dict(size=6, color="white", line=dict(width=2, color=cor_marca)),
-        fillcolor=cor_marca,
-        fill='tozeroy',
-        hovertemplate='<b>Data:</b> %{x|%d/%m %H:%M}<br><b>Valor:</b> R$ %{y:.2f}<extra></extra>' # Tooltip bonito
-    )
-    
-    # Remove grades e deixa limpo
+    # Layout Limpo e Tamanho Fixo (Garante Alinhamento)
     fig.update_layout(
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
-        xaxis_title=None,
-        yaxis_title=None,
+        height=250, # ALTURA FIXA PARA ALINHAR
         margin=dict(l=0, r=0, t=10, b=0),
-        hovermode="x unified",
-        showlegend=False,
-        yaxis=dict(showgrid=True, gridcolor='#f0f0f0'), # Grade suave apenas horizontal
-        height=250
+        xaxis_title=None, yaxis_title=None,
+        plot_bgcolor="rgba(0,0,0,0)",
+        yaxis=dict(showgrid=True, gridcolor='#eee'),
+        xaxis=dict(showgrid=False),
+        showlegend=False
     )
-    
-    # Ajuste de transparência no preenchimento (gradiente fake)
-    fig.data[0].update(opacity=0.3)
-    
     return fig
 
 # --- 4. FUNÇÕES DE DADOS ---
@@ -252,7 +233,6 @@ def tela_login():
                     st.session_state['user'] = user
                     st.success("Login OK!"); time.sleep(0.5); st.rerun()
                 else: st.error("Acesso negado.")
-        
         with tab2:
             nome = st.text_input("Nome", key="cad_nome")
             email_c = st.text_input("E-mail", key="cad_mail")
@@ -290,7 +270,7 @@ def sistema_logado():
 
     df_cotacoes = ler_dados_historico()
 
-    # --- DASHBOARD ---
+    # --- DASHBOARD (COM PLOTLY COLORIDO E ALINHADO) ---
     if menu == "Dashboard (Mercado)":
         st.header("📊 Visão de Mercado")
         if not df_cotacoes.empty:
@@ -307,12 +287,11 @@ def sistema_logado():
                     with mc2: st.metric("👥 P2P", formatar_real(val_p2p) if val_p2p > 0 else "--")
                     st.divider()
                     
-                    # GRÁFICO MODERNO (PLOTLY)
                     if not d.empty:
-                        st.plotly_chart(plotar_grafico_moderno(d, p), use_container_width=True)
+                        # USA PLOTLY COM COR ESPECÍFICA E ALTURA FIXA
+                        st.plotly_chart(plotar_grafico(d, p), use_container_width=True)
                     else:
-                        st.caption("Sem histórico suficiente para gráfico.")
-                        
+                        st.info("Sem dados")
         else: st.warning("Aguardando robô.")
 
     # --- CARTEIRA ---
@@ -355,7 +334,6 @@ def sistema_logado():
                     
                     val_venda = (qtd / 1000) * melhor_preco
                     lucro = val_venda - custo
-                    
                     patrimonio += val_venda
                     custo_total += custo
                     
@@ -386,7 +364,10 @@ def sistema_logado():
                         return f'background-color: {color}; color: black; font-weight: bold;'
                     except: return ''
 
-                st.dataframe(df_view.drop(columns=['val_lucro_raw']).style.applymap(color_lucro, subset=['Lucro (Hoje)']), use_container_width=True)
+                st.dataframe(
+                    df_view.drop(columns=['val_lucro_raw']).style.applymap(color_lucro, subset=['Lucro (Hoje)']), 
+                    use_container_width=True
+                )
                 
                 rid = st.number_input("ID para remover", step=1)
                 if st.button("🗑️ Remover Lote"):
