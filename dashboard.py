@@ -4,6 +4,7 @@ import sqlite3
 import hashlib
 import time
 import re
+import plotly.express as px
 from datetime import datetime
 
 # --- 1. CONFIGURAÇÃO INICIAL ---
@@ -16,127 +17,64 @@ st.set_page_config(
 
 LOGO_URL = "https://raw.githubusercontent.com/jonathanborato/sistema-milhas/main/logo.png"
 
-# --- 2. CONFIGURAÇÃO SUPABASE / AMBIENTE ---
+# --- 2. CONFIGURAÇÃO SUPABASE ---
 try:
     from supabase import create_client
-    from playwright.async_api import async_playwright
     SUPABASE_AVAILABLE = True
-    PLAYWRIGHT_AVAILABLE = True
 except ImportError:
     SUPABASE_AVAILABLE = False
-    PLAYWRIGHT_AVAILABLE = False
 
 def get_supabase():
+    if not SUPABASE_AVAILABLE: return None
     try:
         url = st.secrets["supabase"]["url"]
         key = st.secrets["supabase"]["key"]
         return create_client(url, key)
     except: return None
 
-# --- 3. BANCO LOCAL ---
+# --- 3. BANCO LOCAL (LEITURA) ---
 NOME_BANCO_LOCAL = "milhas.db"
 def conectar_local(): return sqlite3.connect(NOME_BANCO_LOCAL)
 
 def iniciar_banco_local():
     con = conectar_local()
-    cur = con.cursor()
-    cur.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
-    cur.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
-    cur.execute('CREATE TABLE IF NOT EXISTS carteira (id INTEGER PRIMARY KEY AUTOINCREMENT, usuario_email TEXT, data_compra TEXT, programa TEXT, quantidade INTEGER, custo_total REAL, cpm_medio REAL)')
-    cur.execute('CREATE TABLE IF NOT EXISTS mercado_p2p (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, grupo_nome TEXT, programa TEXT, tipo TEXT, valor REAL, observacao TEXT)')
-    cur.execute('CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, nome TEXT, senha_hash TEXT, data_cadastro TEXT)')
+    con.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
+    con.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
+    con.execute('CREATE TABLE IF NOT EXISTS carteira (id INTEGER PRIMARY KEY AUTOINCREMENT, usuario_email TEXT, data_compra TEXT, programa TEXT, quantidade INTEGER, custo_total REAL, cpm_medio REAL)')
+    con.execute('CREATE TABLE IF NOT EXISTS mercado_p2p (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, grupo_nome TEXT, programa TEXT, tipo TEXT, valor REAL, observacao TEXT)')
+    con.execute('CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, nome TEXT, senha_hash TEXT, data_cadastro TEXT)')
     con.commit(); con.close()
 
-# --- SEGURANÇA E UTILITÁRIOS ---
+# --- UTILITÁRIOS ---
 def criar_hash(senha): return hashlib.sha256(senha.encode()).hexdigest()
 
 def validar_senha_forte(senha):
     if len(senha) < 8: return False, "Mínimo 8 caracteres."
-    if not re.search(r"[a-z]", senha): return False, "Precisa de letra minúscula."
-    if not re.search(r"[A-Z]", senha): return False, "Precisa de letra maiúscula."
-    if not re.search(r"[0-9]", senha): return False, "Precisa de número."
-    if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", senha): return False, "Precisa de caractere especial (@#$)."
     return True, ""
 
 def formatar_real(valor):
-    if valor is None or valor == 0: return "R$ 0,00"
-    try:
-        s = f"{float(valor):,.2f}"
-        s = s.replace(',', 'X').replace('.', ',').replace('X', '.')
-        return f"R$ {s}"
-    except ValueError:
-        return "R$ ERR"
+    if valor is None: return "R$ 0,00"
+    s = f"{float(valor):,.2f}"
+    s = s.replace(',', 'X').replace('.', ',').replace('X', '.')
+    return f"R$ {s}"
+
+def plotar_grafico(df, programa):
+    cor = "#0E436B"
+    if "Latam" in programa: cor = "#E30613"
+    elif "Smiles" in programa: cor = "#FF7000"
+    elif "Azul" in programa: cor = "#00AEEF"
+    fig = px.area(df, x="data_hora", y="cpm", markers=True)
+    fig.update_traces(line_color=cor, fillcolor=cor, marker=dict(size=6, color="white", line=dict(width=2, color=cor)))
+    fig.update_layout(height=250, margin=dict(l=0, r=0, t=10, b=0), xaxis_title=None, yaxis_title=None, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", yaxis=dict(showgrid=True, gridcolor='#f0f0f0'), xaxis=dict(showgrid=False), showlegend=False)
+    return fig
+
+def criar_card_preco(titulo, valor, is_winner=False):
+    valor_fmt = formatar_real(valor) if valor > 0 else "--"
+    css_class = "price-card winner-pulse" if is_winner and valor > 0 else "price-card"
+    icon_html = '<span class="winner-icon">🏆</span>' if is_winner and valor > 0 else ""
+    return f'<div class="{css_class}"><div class="card-title">{titulo} {icon_html}</div><div class="card-value">{valor_fmt}</div></div>'
 
 # --- 4. FUNÇÕES DE DADOS ---
-def registrar_usuario(nome, email, senha, telefone):
-    valida, msg = validar_senha_forte(senha)
-    if not valida: return False, msg
-    sb = get_supabase()
-    if sb:
-        try:
-            res = sb.table("usuarios").select("id").eq("email", email).execute()
-            if len(res.data) > 0: return False, "E-mail já existe."
-            dados = {"email": email, "nome": nome, "senha_hash": criar_hash(senha), "telefone": telefone, "plano": "Free", "status": "Ativo"}
-            sb.table("usuarios").insert(dados).execute()
-            return True, "Conta criada! Faça login."
-        except Exception as e: return False, f"Erro: {e}"
-    try:
-        con = conectar_local()
-        con.execute("INSERT INTO usuarios (email, nome, senha_hash) VALUES (?, ?, ?)", (email, nome, criar_hash(senha)))
-        con.commit(); con.close()
-        return True, "Criado Localmente"
-    except: return False, "Erro local."
-
-def autenticar_usuario(email, senha):
-    h = criar_hash(senha)
-    sb = get_supabase()
-    if sb:
-        try:
-            res = sb.table("usuarios").select("*").eq("email", email).eq("senha_hash", h).execute()
-            if len(res.data) > 0:
-                u = res.data[0]
-                return {"nome": u['nome'], "plano": u.get('plano', 'Free'), "email": email}
-        except: pass
-    con = conectar_local()
-    res = con.execute("SELECT nome FROM usuarios WHERE email = ? AND senha_hash = ?", (email, h)).fetchone()
-    con.close()
-    if res: return {"nome": res[0], "plano": "Local", "email": email}
-    return None
-
-def ler_dados_historico():
-    con = conectar_local()
-    try:
-        df = pd.read_sql_query("SELECT * FROM historico ORDER BY data_hora ASC", con)
-        if 'email' in df.columns: df = df.rename(columns={'email': 'programa'})
-        if not df.empty: df['data_hora'] = pd.to_datetime(df['data_hora'], errors='coerce')
-    except: df = pd.DataFrame()
-    con.close()
-    return df
-
-def ler_carteira_usuario(email):
-    sb = get_supabase()
-    if not sb: return pd.DataFrame()
-    try:
-        res = sb.table("carteira").select("*").eq("usuario_email", email).execute()
-        return pd.DataFrame(res.data)
-    except: return pd.DataFrame()
-
-def adicionar_carteira(email, p, q, v):
-    sb = get_supabase()
-    if not sb: return False, "Erro conexão."
-    try:
-        cpm = v/(q/1000) if q>0 else 0
-        dados = {"usuario_email": email, "data_compra": datetime.now().strftime("%Y-%m-%d"), "programa": p, "quantidade": q, "custo_total": v, "cpm_medio": cpm}
-        sb.table("carteira").insert(dados).execute()
-        return True, "Sucesso"
-    except Exception as e: return False, str(e)
-
-def remover_carteira(id_item):
-    sb = get_supabase()
-    if sb: 
-        try: sb.table("carteira").delete().eq("id", id_item).execute()
-        except: pass
-
 def adicionar_p2p(g, p, t, v, o):
     sb = get_supabase()
     if not sb: return False, "Erro de conexão."
@@ -145,6 +83,14 @@ def adicionar_p2p(g, p, t, v, o):
         sb.table("mercado_p2p").insert(dados).execute()
         return True, "Sucesso"
     except Exception as e: return False, str(e)
+
+def ler_p2p_todos():
+    sb = get_supabase()
+    if not sb: return pd.DataFrame()
+    try:
+        res = sb.table("mercado_p2p").select("*").order("id", desc=True).limit(50).execute()
+        return pd.DataFrame(res.data)
+    except: return pd.DataFrame()
 
 def pegar_ultimo_p2p(programa):
     sb = get_supabase()
@@ -155,13 +101,63 @@ def pegar_ultimo_p2p(programa):
     except: pass
     return 0.0
 
-def ler_p2p_todos():
+def adicionar_carteira(email, p, q, v):
+    sb = get_supabase()
+    if not sb: return False, "Erro conexão."
+    try:
+        cpm = float(v) / (float(q) / 1000) if float(q) > 0 else 0
+        dados = {"usuario_email": email, "data_compra": datetime.now().strftime("%Y-%m-%d"), "programa": p, "quantidade": int(q), "custo_total": float(v), "cpm_medio": cpm}
+        sb.table("carteira").insert(dados).execute()
+        return True, "Sucesso"
+    except Exception as e: return False, str(e)
+
+def remover_carteira(id_item):
+    sb = get_supabase()
+    if sb: 
+        try: sb.table("carteira").delete().eq("id", id_item).execute()
+        except: pass
+
+def ler_carteira_usuario(email):
     sb = get_supabase()
     if not sb: return pd.DataFrame()
     try:
-        res = sb.table("mercado_p2p").select("*").order("id", desc=True).limit(50).execute()
+        res = sb.table("carteira").select("*").eq("usuario_email", email).execute()
         return pd.DataFrame(res.data)
     except: return pd.DataFrame()
+
+@st.cache_data(ttl=60)
+def ler_dados_historico():
+    con = conectar_local()
+    try:
+        df = pd.read_sql_query("SELECT * FROM historico ORDER BY data_hora ASC", con)
+        if 'email' in df.columns: df = df.rename(columns={'email': 'programa'})
+        if not df.empty: df['data_hora'] = pd.to_datetime(df['data_hora'], errors='coerce')
+    except: df = pd.DataFrame()
+    con.close()
+    return df
+
+def registrar_usuario(nome, email, senha, telefone):
+    sb = get_supabase()
+    if not sb: return False, "Sem conexão."
+    try:
+        res = sb.table("usuarios").select("id").eq("email", email).execute()
+        if len(res.data) > 0: return False, "E-mail já cadastrado."
+        dados = {"email": email, "nome": nome, "senha_hash": hashlib.sha256(senha.encode()).hexdigest(), "telefone": telefone, "plano": "Free", "status": "Ativo"}
+        sb.table("usuarios").insert(dados).execute()
+        return True, "Conta criada!"
+    except Exception as e: return False, f"Erro: {e}"
+
+def autenticar_usuario(email, senha):
+    sb = get_supabase()
+    if not sb: return None
+    try:
+        h = hashlib.sha256(senha.encode()).hexdigest()
+        res = sb.table("usuarios").select("*").eq("email", email).eq("senha_hash", h).execute()
+        if len(res.data) > 0:
+            u = res.data[0]
+            return {"nome": u['nome'], "plano": u.get('plano', 'Free'), "email": email}
+    except: pass
+    return None
 
 def admin_listar_todos():
     sb = get_supabase()
@@ -184,16 +180,7 @@ def admin_resetar_senha(id_user, nova_senha_texto):
         return True
     return False
 
-# --- ROBÔ DE COTAÇÃO (INTERNO) ---
-async def executar_cotacao_agora():
-    if not PLAYWRIGHT_AVAILABLE:
-        st.error("ERRO: Playwright não está pronto. Reinicie o App para instalar dependências.")
-        return False
-    
-    # ... (código do robô omitido para brevidade, pois o erro não está aqui) ...
-    return False
-
-# --- 7. INICIALIZAÇÃO ---
+# --- INICIALIZA ---
 iniciar_banco_local()
 
 # --- CSS ---
@@ -206,6 +193,9 @@ st.markdown("""
     @keyframes pulse-green { 0% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(37, 211, 102, 0); } 100% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0); } }
     .price-card { background: #f8f9fa; padding: 15px; border-radius: 10px; border: 1px solid #dee2e6; text-align: center; margin-bottom: 10px; }
     .winner-pulse { border: 2px solid #25d366 !important; background: #f0fff4 !important; animation: pulse-green 2s infinite; color: #0E436B; }
+    .card-title { font-size: 0.85rem; color: #6c757d; margin-bottom: 5px; }
+    .card-value { font-size: 1.4rem; font-weight: 800; color: #212529; }
+    .winner-icon { display: inline-block; margin-left: 5px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -213,7 +203,6 @@ def mostrar_paywall():
     st.error("🔒 RECURSO PRO")
     st.info("Faça o upgrade para acessar.")
 
-# --- SESSÃO ---
 if 'user' not in st.session_state: st.session_state['user'] = None
 
 # ==============================================================================
@@ -224,7 +213,6 @@ def tela_login():
     with c2:
         st.markdown(f"""<div style="display: flex; flex-direction: column; align-items: center; margin-bottom: 20px;"><img src="{LOGO_URL}" style="width: 300px; max-width: 100%;"><h3 style='text-align: center; color: #0E436B; margin-top: -30px; margin-bottom: 0;'>Acesso ao Sistema</h3></div>""", unsafe_allow_html=True)
         tab1, tab2 = st.tabs(["ENTRAR", "CRIAR CONTA"])
-        
         with tab1:
             email = st.text_input("E-mail", key="log_email")
             senha = st.text_input("Senha", type="password", key="log_pass")
@@ -237,9 +225,8 @@ def tela_login():
                 user = autenticar_usuario(email, senha)
                 if user:
                     st.session_state['user'] = user
-                    st.success(f"Olá, {user['nome']}!"); time.sleep(0.5); st.rerun()
+                    st.success("Login OK!"); time.sleep(0.5); st.rerun()
                 else: st.error("Acesso negado.")
-        
         with tab2:
             nome = st.text_input("Nome", key="cad_nome")
             email_c = st.text_input("E-mail", key="cad_mail")
@@ -256,21 +243,21 @@ def tela_login():
 def sistema_logado():
     user = st.session_state['user']
     plano = user['plano']
-    
+    sb_status = "🟢 Online" if get_supabase() else "🔴 Offline"
     opcoes = ["Dashboard (Mercado)", "Minha Carteira", "Mercado P2P", "Promoções"]
     if plano == "Admin": opcoes.append("👑 Gestão de Usuários")
 
     with st.sidebar:
         st.markdown(f"""<div style="display: flex; justify-content: center; margin-bottom: 15px;"><img src="{LOGO_URL}" style="width: 200px; max-width: 100%;"></div>""", unsafe_allow_html=True)
         st.markdown(f"<div style='text-align: center; margin-top: -10px;'>Olá, <b>{user['nome'].split()[0]}</b></div>", unsafe_allow_html=True)
-        st.caption(f"Nuvem: {'🟢 Online' if get_supabase() else '🔴 Offline'}")
+        st.caption(f"Nuvem: {sb_status}")
         if plano == "Admin": st.success("👑 ADMIN")
         elif plano == "Pro": st.success("⭐ PRO")
         else: st.info("🔹 FREE")
         st.divider()
         menu = st.radio("Menu", opcoes)
         st.divider()
-        if st.button("Sair"): st.session_state['user'] = None; st.rerun()
+        if st.button("SAIR"): st.session_state['user'] = None; st.rerun()
 
     df_cotacoes = ler_dados_historico()
 
@@ -280,16 +267,9 @@ def sistema_logado():
         with col_title:
             st.header("📊 Visão de Mercado")
         with col_btn:
-            if st.button("🔄 Atualizar Agora"):
-                if not PLAYWRIGHT_AVAILABLE: st.error("ERRO: Playwright não está pronto. Reinicie o App para instalar dependências.")
-                else:
-                    with st.spinner("Robô consultando Hotmilhas em tempo real... (Aguarde 40s)"):
-                        sucesso = asyncio.run(executar_cotacao_agora())
-                        if sucesso:
-                            st.success("Atualizado!")
-                            st.cache_data.clear()
-                            st.rerun()
-                        else: st.error("Erro ao rodar robô.")
+            if st.button("🔄 Recarregar Dados"):
+                st.cache_data.clear()
+                st.rerun()
 
         if not df_cotacoes.empty:
             cols = st.columns(3)
@@ -308,11 +288,10 @@ def sistema_logado():
                     with mc2: st.markdown(criar_card_preco("👥 P2P", val_p2p, p2p_wins), unsafe_allow_html=True)
                     st.divider()
                     if not d.empty: st.plotly_chart(plotar_grafico(d, p), use_container_width=True)
-        else: st.warning("Aguardando robô.")
+        else: st.warning("Aguardando primeira execução do robô (GitHub Actions).")
 
     # --- CARTEIRA ---
     elif menu == "Minha Carteira":
-        df_cotacoes = ler_dados_historico()
         st.header("💼 Carteira")
         if plano == "Free": mostrar_paywall()
         else:
@@ -373,7 +352,7 @@ def sistema_logado():
             with st.form("p2p"):
                 st.markdown("### 👑 Inserir Oferta (Admin)")
                 c1, c2 = st.columns(2)
-                g = st.text_input("Grupo")
+                g = c1.text_input("Grupo")
                 p = c2.selectbox("Prog", ["Latam", "Smiles", "Azul"])
                 val = st.number_input("Valor", 15.0)
                 obs = st.text_input("Obs")
@@ -383,7 +362,7 @@ def sistema_logado():
                     else: st.error(f"Erro: {msg}")
         else:
             if plano == "Free": mostrar_paywall(); st.stop()
-            else: st.info("ℹ️ Dados verificados pela administração.")
+            else: st.info("ℹ️ Dados verificados.")
         dfp = ler_p2p_todos()
         if not dfp.empty:
             dfp['valor'] = dfp['valor'].apply(formatar_real)
