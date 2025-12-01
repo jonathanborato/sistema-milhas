@@ -31,18 +31,22 @@ def get_supabase():
         return create_client(url, key)
     except: return None
 
-# --- 3. BANCO LOCAL (APENAS PARA CACHE DO ROBÔ) ---
+# --- 3. BANCO LOCAL ---
 NOME_BANCO_LOCAL = "milhas.db"
+
 def conectar_local(): return sqlite3.connect(NOME_BANCO_LOCAL)
 
-# O Robô continua salvando no SQLite (Git), mas o resto vai pra nuvem
-def iniciar_banco_local():
+def iniciar_banco():
     con = conectar_local()
-    con.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
-    con.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
+    cur = con.cursor()
+    # Garante que as tabelas existam
+    cur.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
+    cur.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
+    cur.execute('CREATE TABLE IF NOT EXISTS carteira (id INTEGER PRIMARY KEY AUTOINCREMENT, usuario_email TEXT, data_compra TEXT, programa TEXT, quantidade INTEGER, custo_total REAL, cpm_medio REAL)')
+    cur.execute('CREATE TABLE IF NOT EXISTS mercado_p2p (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, grupo_nome TEXT, programa TEXT, tipo TEXT, valor REAL, observacao TEXT)')
+    cur.execute('CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, nome TEXT, senha_hash TEXT, data_cadastro TEXT)')
     con.commit(); con.close()
 
-# --- SEGURANÇA ---
 def criar_hash(senha): return hashlib.sha256(senha.encode()).hexdigest()
 
 def validar_senha_forte(senha):
@@ -53,9 +57,7 @@ def validar_senha_forte(senha):
     if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", senha): return False, "Precisa de caractere especial (@#$)."
     return True, ""
 
-# --- 4. FUNÇÕES DE DADOS (AGORA HÍBRIDAS) ---
-
-# A) USUÁRIOS (NUVEM)
+# --- 4. FUNÇÕES DE USUÁRIO (NUVEM) ---
 def registrar_usuario(nome, email, senha, telefone):
     valida, msg = validar_senha_forte(senha)
     if not valida: return False, msg
@@ -63,12 +65,17 @@ def registrar_usuario(nome, email, senha, telefone):
     if sb:
         try:
             res = sb.table("usuarios").select("*").eq("email", email).execute()
-            if len(res.data) > 0: return False, "E-mail já cadastrado."
+            if len(res.data) > 0: return False, "E-mail já existe."
             dados = {"email": email, "nome": nome, "senha_hash": criar_hash(senha), "telefone": telefone, "plano": "Free", "status": "Ativo"}
             sb.table("usuarios").insert(dados).execute()
             return True, "Conta criada! Faça login."
         except Exception as e: return False, f"Erro Nuvem: {e}"
-    return False, "Erro conexão."
+    try:
+        con = conectar_local()
+        con.execute("INSERT INTO usuarios (email, nome, senha_hash) VALUES (?, ?, ?)", (email, nome, criar_hash(senha)))
+        con.commit(); con.close()
+        return True, "Criado Localmente"
+    except: return False, "Erro local."
 
 def autenticar_usuario(email, senha):
     h = criar_hash(senha)
@@ -80,9 +87,13 @@ def autenticar_usuario(email, senha):
                 u = res.data[0]
                 return {"nome": u['nome'], "plano": u.get('plano', 'Free'), "email": email}
         except: pass
+    con = conectar_local()
+    res = con.execute("SELECT nome FROM usuarios WHERE email = ? AND senha_hash = ?", (email, h)).fetchone()
+    con.close()
+    if res: return {"nome": res[0], "plano": "Local", "email": email}
     return None
 
-# B) ADMIN (NUVEM)
+# --- FUNÇÕES ADMIN ---
 def admin_listar_todos():
     sb = get_supabase()
     if sb:
@@ -104,24 +115,31 @@ def admin_resetar_senha(id_user, nova_senha_texto):
         return True
     return False
 
-# C) CARTEIRA (NUVEM - AGORA SALVA DE VERDADE!)
-def adicionar_carteira(email, p, q, v):
-    sb = get_supabase()
-    if sb:
-        cpm = v/(q/1000) if q>0 else 0
-        dados = {
-            "usuario_email": email,
-            "data_compra": datetime.now().strftime("%Y-%m-%d"),
-            "programa": p,
-            "quantidade": q,
-            "custo_total": v,
-            "cpm_medio": cpm
-        }
-        sb.table("carteira").insert(dados).execute()
+# --- 5. FUNÇÕES DE DADOS (COM CACHE INTELIGENTE) ---
 
-def remover_carteira(id_item):
-    sb = get_supabase()
-    if sb: sb.table("carteira").delete().eq("id", id_item).execute()
+# TTL=60 significa: "Lembre dos dados por 60 seg, depois releia do arquivo"
+@st.cache_data(ttl=60)
+def ler_dados_historico():
+    con = conectar_local()
+    try:
+        # Pega tudo da tabela historico
+        df = pd.read_sql_query("SELECT * FROM historico ORDER BY data_hora ASC", con)
+        
+        # Renomeia a coluna legada 'email' para 'programa' se existir
+        if 'email' in df.columns: 
+            df = df.rename(columns={'email': 'programa'})
+            
+        # Converte a coluna de data para datetime (ESSENCIAL PARA O GRÁFICO)
+        if not df.empty and 'data_hora' in df.columns:
+             df['data_hora'] = pd.to_datetime(df['data_hora'], errors='coerce')
+             
+    except Exception as e: 
+        # Se der erro, imprime no terminal do servidor mas não quebra o site
+        print(f"Erro ao ler histórico: {e}")
+        df = pd.DataFrame()
+        
+    con.close()
+    return df
 
 def ler_carteira_usuario(email):
     sb = get_supabase()
@@ -130,19 +148,29 @@ def ler_carteira_usuario(email):
         return pd.DataFrame(res.data)
     return pd.DataFrame()
 
-# D) P2P (NUVEM - AGORA SALVA DE VERDADE!)
+def adicionar_carteira(email, p, q, v):
+    sb = get_supabase()
+    if sb:
+        cpm = v/(q/1000) if q>0 else 0
+        dados = {"usuario_email": email, "data_compra": datetime.now().strftime("%Y-%m-%d"), "programa": p, "quantidade": q, "custo_total": v, "cpm_medio": cpm}
+        sb.table("carteira").insert(dados).execute()
+
+def remover_carteira(id_item):
+    sb = get_supabase()
+    if sb: sb.table("carteira").delete().eq("id", id_item).execute()
+
 def adicionar_p2p(g, p, t, v, o):
     sb = get_supabase()
     if sb:
-        dados = {
-            "data_hora": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "grupo_nome": g,
-            "programa": p,
-            "tipo": t,
-            "valor": v,
-            "observacao": o
-        }
+        dados = {"data_hora": datetime.now().strftime("%Y-%m-%d %H:%M"), "grupo_nome": g, "programa": p, "tipo": t, "valor": v, "observacao": o}
         sb.table("mercado_p2p").insert(dados).execute()
+
+def pegar_ultimo_p2p(programa):
+    sb = get_supabase()
+    if sb:
+        res = sb.table("mercado_p2p").select("valor").ilike("programa", f"%{programa}%").eq("tipo", "COMPRA").order("valor", desc=True).limit(1).execute()
+        if len(res.data) > 0: return float(res.data[0]['valor'])
+    return 0.0
 
 def ler_p2p_todos():
     sb = get_supabase()
@@ -151,28 +179,8 @@ def ler_p2p_todos():
         return pd.DataFrame(res.data)
     return pd.DataFrame()
 
-def pegar_melhor_preco_p2p(programa):
-    """Pega a maior oferta de COMPRA no P2P para valorar estoque"""
-    sb = get_supabase()
-    if sb:
-        # Busca alguém querendo COMPRAR (tipo=COMPRA) com o maior valor
-        res = sb.table("mercado_p2p").select("valor").ilike("programa", f"%{programa}%").eq("tipo", "COMPRA").order("valor", desc=True).limit(1).execute()
-        if len(res.data) > 0:
-            return float(res.data[0]['valor'])
-    return 0.0
-
-# E) HISTÓRICO (LOCAL - Mantém SQLite pois vem do Robô GitHub Actions)
-def ler_dados_historico():
-    con = conectar_local()
-    try:
-        df = pd.read_sql_query("SELECT * FROM historico ORDER BY data_hora ASC", con)
-        if 'email' in df.columns: df = df.rename(columns={'email': 'programa'})
-    except: df = pd.DataFrame()
-    con.close()
-    return df
-
 # --- INICIALIZA ---
-iniciar_banco_local()
+iniciar_banco()
 
 # --- ESTILIZAÇÃO CSS ---
 st.markdown("""
@@ -187,7 +195,7 @@ st.markdown("""
 
 def mostrar_paywall():
     st.error("🔒 RECURSO PRO")
-    st.info("Faça o upgrade para acessar esta ferramenta.")
+    st.info("Faça o upgrade para acessar.")
 
 # --- SESSÃO ---
 if 'user' not in st.session_state: st.session_state['user'] = None
@@ -199,7 +207,6 @@ def tela_login():
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
         st.markdown(f"""<div style="display: flex; flex-direction: column; align-items: center; margin-bottom: 20px;"><img src="{LOGO_URL}" style="width: 300px; max-width: 100%;"><h3 style='text-align: center; color: #0E436B; margin-top: -25px; margin-bottom: 0;'>Acesso ao Sistema</h3></div>""", unsafe_allow_html=True)
-        
         tab1, tab2 = st.tabs(["ENTRAR", "CRIAR CONTA"])
         with tab1:
             email = st.text_input("E-mail", key="log_email")
@@ -255,106 +262,72 @@ def sistema_logado():
         if not df_cotacoes.empty:
             cols = st.columns(3)
             for i, p in enumerate(["Latam", "Smiles", "Azul"]):
-                # Filtra Hotmilhas (Robô)
                 d = df_cotacoes[df_cotacoes['programa'].str.contains(p, case=False, na=False)]
-                val_hot = d.iloc[-1]['cpm'] if not d.empty else 0.0
-                
-                # Busca Melhor P2P (Nuvem)
-                val_p2p = pegar_melhor_preco_p2p(p)
+                val_hot = 0.0
+                if not d.empty: val_hot = d.iloc[-1]['cpm']
+                valor_p2p = pegar_ultimo_p2p(p)
                 
                 with cols[i]:
                     st.markdown(f"### {p}")
                     mc1, mc2 = st.columns(2)
-                    with mc1:
-                        st.metric("Hotmilhas", f"R$ {val_hot:.2f}" if val_hot > 0 else "--")
+                    with mc1: st.metric("🤖 Hotmilhas", f"R$ {val_hot:.2f}" if val_hot > 0 else "--")
                     with mc2:
                         delta = 0.0
-                        if val_hot > 0 and val_p2p > 0: delta = val_p2p - val_hot
-                        st.metric("P2P (Compra)", f"R$ {val_p2p:.2f}" if val_p2p > 0 else "--", delta=f"{delta:.2f}" if val_p2p > 0 else None)
-                    
+                        if val_hot > 0 and valor_p2p > 0: delta = valor_p2p - val_hot
+                        st.metric("👥 P2P", f"R$ {valor_p2p:.2f}" if valor_p2p > 0 else "--", delta=f"{delta:.2f}" if valor_p2p > 0 else None)
                     st.divider()
                     if not d.empty: st.line_chart(d, x="data_hora", y="cpm", height=200)
-        else: st.warning("Aguardando robô.")
+            
+            # --- ÁREA DE DIAGNÓSTICO (SÓ PARA VOCÊ VER SE TEM DADOS) ---
+            with st.expander("🛠️ Dados Brutos (Diagnóstico)"):
+                st.write("Se a tabela abaixo estiver vazia, o robô ainda não salvou dados.")
+                st.dataframe(df_cotacoes)
+                
+        else:
+            st.warning("⚠️ O banco de dados local está vazio.")
+            st.info("Motivo Provável: O Streamlit ainda não baixou a atualização do Robô do GitHub.")
+            st.markdown("""
+            **Solução:**
+            1. Vá no painel do Streamlit Cloud.
+            2. Clique nos 3 pontinhos do App.
+            3. Clique em **'Reboot'**.
+            """)
 
-    # --- CARTEIRA (COM CÁLCULO INTELIGENTE) ---
+    # --- CARTEIRA ---
     elif menu == "Minha Carteira":
         st.header("💼 Carteira")
         if plano == "Free": mostrar_paywall()
         else:
-            with st.expander("➕ Adicionar Lote"):
+            with st.expander("➕ Adicionar"):
                 c1, c2, c3 = st.columns(3)
                 p = c1.selectbox("Programa", ["Latam Pass", "Smiles", "Azul", "Livelo"])
                 q = c2.number_input("Qtd", 1000, step=1000)
-                v = c3.number_input("R$ Total Pago", 0.0, step=10.0)
-                if st.button("Salvar Lote"):
-                    adicionar_carteira(user['email'], p, q, v); st.rerun()
-            
+                v = c3.number_input("R$ Total", 0.0, step=10.0)
+                if st.button("SALVAR"): adicionar_carteira(user['email'], p, q, v); st.rerun()
             dfc = ler_carteira_usuario(user['email'])
             if not dfc.empty:
-                patrimonio = 0
-                custo_total = 0
-                view_data = []
-                
-                for _, row in dfc.iterrows():
-                    prog_nome = row['programa'].split()[0] # Pega primeiro nome (Latam, Smiles...)
-                    
-                    # 1. Pega preço Hotmilhas
-                    filtro_hot = df_cotacoes[df_cotacoes['programa'].str.contains(prog_nome, case=False, na=False)]
-                    preco_hot = filtro_hot.iloc[-1]['cpm'] if not filtro_hot.empty else 0.0
-                    
-                    # 2. Pega preço P2P
-                    preco_p2p = pegar_melhor_preco_p2p(prog_nome)
-                    
-                    # 3. Define Melhor Preço para Valuation
-                    melhor_preco = max(preco_hot, preco_p2p)
-                    origem_preco = "Hotmilhas" if preco_hot >= preco_p2p else "P2P"
-                    if melhor_preco == 0: origem_preco = "Sem dados"
-                    
-                    val_venda = (row['quantidade']/1000) * melhor_preco
-                    lucro = val_venda - row['custo_total']
-                    
-                    patrimonio += val_venda
-                    custo_total += row['custo_total']
-                    
-                    view_data.append({
-                        "ID": row['id'], "Programa": row['programa'], "Qtd": row['quantidade'],
-                        "Custo": f"R$ {row['custo_total']:.2f}",
-                        "CPM Pago": f"R$ {row['cpm_medio']:.2f}",
-                        "Melhor Cotação": f"R$ {melhor_preco:.2f} ({origem_preco})",
-                        "Lucro Est.": lucro
-                    })
-                
-                # KPIs
-                k1, k2, k3 = st.columns(3)
-                k1.metric("Patrimônio (Melhor Cotação)", f"R$ {patrimonio:,.2f}")
-                k2.metric("Total Investido", f"R$ {custo_total:,.2f}")
-                k3.metric("Lucro Projetado", f"R$ {patrimonio - custo_total:,.2f}", delta=f"{((patrimonio/custo_total)-1)*100:.1f}%" if custo_total>0 else 0)
-                
-                st.dataframe(pd.DataFrame(view_data).style.applymap(lambda x: 'color: green' if x > 0 else 'color: red', subset=['Lucro Est.']), use_container_width=True)
-                
-                rid = st.number_input("ID para remover", step=1)
-                if st.button("Remover Lote"): remover_carteira(rid); st.rerun()
-            else: st.info("Sua carteira está vazia na nuvem.")
+                st.dataframe(dfc)
+                rid = st.number_input("ID Remover", step=1)
+                if st.button("REMOVER"): remover_carteira(rid); st.rerun()
+            else: st.info("Vazia.")
 
     # --- P2P ---
     elif menu == "Mercado P2P":
         st.header("📢 Radar P2P")
         if plano == "Admin":
             with st.form("p2p"):
-                st.markdown("### 👑 Inserir Oferta")
+                st.markdown("### 👑 Inserir Oferta (Admin)")
                 c1, c2 = st.columns(2)
                 g = c1.text_input("Grupo")
                 p = c2.selectbox("Prog", ["Latam", "Smiles", "Azul"])
-                t = st.radio("Tipo", ["VENDA (Alguém vendendo)", "COMPRA (Alguém comprando)"])
+                t = st.radio("Tipo", ["VENDA", "COMPRA"])
                 val = st.number_input("Valor", 15.0)
                 obs = st.text_input("Obs")
-                if st.form_submit_button("Publicar"):
-                    adicionar_p2p(g, p, "COMPRA" if "COMPRA" in t else "VENDA", val, obs)
-                    st.success("Salvo!"); time.sleep(0.5); st.rerun()
+                if st.form_submit_button("PUBLICAR"):
+                    adicionar_p2p(g, p, "COMPRA" if "COMPRA" in t else "VENDA", val, obs); st.success("Salvo!"); time.sleep(0.5); st.rerun()
         else:
             if plano == "Free": mostrar_paywall(); st.stop()
-            else: st.info("ℹ️ Cotações verificadas de grupos fechados.")
-
+            else: st.info("ℹ️ Dados verificados pela administração.")
         dfp = ler_p2p_todos()
         if not dfp.empty: st.dataframe(dfp, use_container_width=True)
 
