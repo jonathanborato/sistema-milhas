@@ -6,7 +6,7 @@ import time
 import re
 from datetime import datetime
 
-# --- 1. CONFIGURAÇÃO INICIAL ---
+# --- 1. CONFIGURAÇÃO INICIAL (PRIMEIRA LINHA OBRIGATÓRIA) ---
 st.set_page_config(
     page_title="MilhasPro System",
     page_icon="🚀",
@@ -130,6 +130,8 @@ def ler_dados_historico():
     try:
         df = pd.read_sql_query("SELECT * FROM historico ORDER BY data_hora ASC", con)
         if 'email' in df.columns: df = df.rename(columns={'email': 'programa'})
+        if not df.empty and 'data_hora' in df.columns:
+             df['data_hora'] = pd.to_datetime(df['data_hora'], errors='coerce')
     except: df = pd.DataFrame()
     con.close()
     return df
@@ -171,16 +173,16 @@ def pegar_ultimo_p2p(programa):
 # --- INICIALIZA ---
 iniciar_banco()
 
-# --- ESTILIZAÇÃO CSS (DESIGN AZUL + CENTRALIZAÇÃO REAL) ---
+# --- ESTILIZAÇÃO CSS ---
 st.markdown("""
 <style>
-    /* Remove espaço branco do topo */
+    /* Ajuste de Espaçamento */
     .block-container {
-        padding-top: 2rem !important;
+        padding-top: 1rem !important;
         padding-bottom: 2rem !important;
     }
     
-    /* Botões Azuis da Logo (#0E436B) */
+    /* Botões Azuis */
     div.stButton > button {
         width: 100%;
         background-color: #0E436B;
@@ -194,14 +196,6 @@ st.markdown("""
         background-color: #082d4a;
         color: white;
     }
-    
-    /* Estilo dos Cards */
-    .metric-card {
-        background: #f0f2f6; 
-        padding: 15px; 
-        border-radius: 8px;
-        box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -213,21 +207,19 @@ def mostrar_paywall():
 if 'user' not in st.session_state: st.session_state['user'] = None
 
 # ==============================================================================
-# TELA DE LOGIN
+# TELA DE LOGIN (CENTRALIZADA)
 # ==============================================================================
 def tela_login():
-    # Colunas balanceadas para centralização
     c1, c2, c3 = st.columns([1, 2, 1])
     
     with c2:
-        # --- AQUI ESTÁ A MÁGICA: HTML PARA FORÇAR CENTRALIZAÇÃO ---
+        # Logo via HTML para centralização garantida
         st.markdown(f"""
-            <div style="display: flex; justify-content: center; margin-bottom: 5px;">
-                <img src="{LOGO_URL}" style="width: 300px; max-width: 100%;">
+            <div style="display: flex; justify-content: center; margin-bottom: 15px;">
+                <img src="{LOGO_URL}" style="width: 250px;">
             </div>
-            <h3 style='text-align: center; color: #0E436B; margin-top: 0px;'>Acesso ao Sistema</h3>
+            <h3 style='text-align: center; color: #0E436B; margin-top: -15px;'>Acesso ao Sistema</h3>
             """, unsafe_allow_html=True)
-        # -----------------------------------------------------------
         
         tab1, tab2 = st.tabs(["ENTRAR", "CRIAR CONTA"])
         
@@ -268,14 +260,13 @@ def sistema_logado():
     if plano == "Admin": opcoes.append("👑 Gestão de Usuários")
 
     with st.sidebar:
-        # Centralizando logo na barra lateral também via HTML
         st.markdown(f"""
             <div style="display: flex; justify-content: center; margin-bottom: 20px;">
-                <img src="{LOGO_URL}" style="width: 200px;">
+                <img src="{LOGO_URL}" style="width: 180px;">
             </div>
             """, unsafe_allow_html=True)
         
-        st.markdown(f"<div style='text-align: center; margin-top: -10px;'>Olá, <b>{user['nome'].split()[0]}</b></div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='text-align: center;'>Olá, <b>{user['nome'].split()[0]}</b></div>", unsafe_allow_html=True)
         
         if plano == "Admin": st.success("👑 ADMIN")
         elif plano == "Pro": st.success("⭐ PRO")
@@ -301,15 +292,23 @@ def sistema_logado():
                 
                 with cols[i]:
                     st.markdown(f"### {p}")
-                    if val_hot > 0: st.metric("Hotmilhas", f"R$ {val_hot:.2f}")
-                    else: st.metric("Hotmilhas", "--")
                     
+                    # Preço Hotmilhas
+                    if val_hot > 0: st.metric("🤖 Hotmilhas", f"R$ {val_hot:.2f}")
+                    else: st.metric("🤖 Hotmilhas", "--")
+                    
+                    # Preço P2P
                     if valor_p2p > 0:
                         delta = 0.0
                         if val_hot > 0: delta = valor_p2p - val_hot
-                        st.metric("Grupos P2P", f"R$ {valor_p2p:.2f}", delta=f"{delta:.2f} vs Robô")
-                    else: st.caption("Sem dados P2P")
-                    if not d.empty: st.line_chart(d, x="data_hora", y="cpm")
+                        st.metric("👥 P2P (Grupos)", f"R$ {valor_p2p:.2f}", delta=f"{delta:.2f} vs Robô")
+                    else:
+                        st.caption("Sem dados P2P")
+                    
+                    st.divider()
+                    
+                    if not d.empty:
+                        st.line_chart(d, x="data_hora", y="cpm", height=200)
         else: st.warning("Aguardando robô.")
 
     # --- CARTEIRA ---
