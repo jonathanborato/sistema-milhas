@@ -6,14 +6,13 @@ import time
 import re
 import plotly.express as px
 from datetime import datetime
-import asyncio
 
 # --- 1. CONFIGURAÇÃO INICIAL ---
 st.set_page_config(
-    page_title="MilhasPro | O Sistema do Milheiro",
+    page_title="MilhasPro System",
     page_icon="🚀",
     layout="wide",
-    initial_sidebar_state="collapsed" # Sidebar escondida na LP para focar na venda
+    initial_sidebar_state="expanded"
 )
 
 LOGO_URL = "https://raw.githubusercontent.com/jonathanborato/sistema-milhas/main/logo.png"
@@ -39,11 +38,12 @@ def conectar_local(): return sqlite3.connect(NOME_BANCO_LOCAL)
 
 def iniciar_banco_local():
     con = conectar_local()
-    con.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
-    con.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
-    con.execute('CREATE TABLE IF NOT EXISTS carteira (id INTEGER PRIMARY KEY AUTOINCREMENT, usuario_email TEXT, data_compra TEXT, programa TEXT, quantidade INTEGER, custo_total REAL, cpm_medio REAL)')
-    con.execute('CREATE TABLE IF NOT EXISTS mercado_p2p (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, grupo_nome TEXT, programa TEXT, tipo TEXT, valor REAL, observacao TEXT)')
-    con.execute('CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, nome TEXT, senha_hash TEXT, data_cadastro TEXT)')
+    cur = con.cursor()
+    cur.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
+    cur.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
+    cur.execute('CREATE TABLE IF NOT EXISTS carteira (id INTEGER PRIMARY KEY AUTOINCREMENT, usuario_email TEXT, data_compra TEXT, programa TEXT, quantidade INTEGER, custo_total REAL, cpm_medio REAL)')
+    cur.execute('CREATE TABLE IF NOT EXISTS mercado_p2p (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, grupo_nome TEXT, programa TEXT, tipo TEXT, valor REAL, observacao TEXT)')
+    cur.execute('CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, nome TEXT, senha_hash TEXT, data_cadastro TEXT)')
     con.commit(); con.close()
 
 # --- 4. UTILITÁRIOS ---
@@ -242,9 +242,7 @@ if 'user' not in st.session_state: st.session_state['user'] = None
 # TELA 1: LANDING PAGE (VENDAS + LOGIN)
 # ==============================================================================
 def tela_landing_page():
-    # HERO SECTION
     c1, c2 = st.columns([1.3, 1])
-    
     with c1:
         st.image(LOGO_URL, width=220)
         st.markdown("""
@@ -259,7 +257,6 @@ def tela_landing_page():
         st.write("")
     
     with c2:
-        # LOGIN BOX FLUTUANTE
         st.markdown("<div style='background: white; padding: 25px; border-radius: 12px; box-shadow: 0 10px 30px rgba(14, 67, 107, 0.1); border: 1px solid #E2E8F0;'>", unsafe_allow_html=True)
         st.markdown("<h3 style='text-align: center; color: #0E436B; margin-top: 0;'>Acessar Painel</h3>", unsafe_allow_html=True)
         
@@ -269,13 +266,11 @@ def tela_landing_page():
             email = st.text_input("E-mail", key="log_email")
             senha = st.text_input("Senha", type="password", key="log_pass")
             if st.button("ENTRAR AGORA", type="primary", key="btn_log"):
-                # Backdoor Admin
                 try:
                     if email == st.secrets["admin"]["email"] and senha == st.secrets["admin"]["senha"]:
                         st.session_state['user'] = {"nome": st.secrets["admin"]["nome"], "plano": "Admin", "email": email}
                         st.rerun()
                 except: pass
-                
                 user = autenticar_usuario(email, senha)
                 if user:
                     st.session_state['user'] = user
@@ -297,56 +292,27 @@ def tela_landing_page():
         st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("---")
-
-    # FEATURE CARDS
     st.markdown("<h2 style='text-align: center; color: #1E293B; margin-bottom: 30px;'>Por que escolher o MilhasPro?</h2>", unsafe_allow_html=True)
     col_f1, col_f2, col_f3 = st.columns(3)
-    
-    with col_f1:
-        st.markdown("""
-        <div class="lp-card">
-            <span class="lp-icon">🤖</span>
-            <div class="lp-title">Automação Inteligente</div>
-            <div class="lp-text">Nosso robô monitora a Hotmilhas todo dia e salva o histórico para você nunca perder o pico de venda.</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col_f2:
-        st.markdown("""
-        <div class="lp-card">
-            <span class="lp-icon">👥</span>
-            <div class="lp-title">Radar P2P Exclusivo</div>
-            <div class="lp-text">Saiba quanto estão pagando nos grupos fechados. Compare preço oficial x paralelo e venda mais caro.</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with col_f3:
-        st.markdown("""
-        <div class="lp-card">
-            <span class="lp-icon">💼</span>
-            <div class="lp-title">Controle de Patrimônio</div>
-            <div class="lp-text">Registre suas compras. O sistema calcula seu lucro baseado na MELHOR cotação do dia automaticamente.</div>
-        </div>
-        """, unsafe_allow_html=True)
+    with col_f1: st.markdown("""<div class="lp-card"><span class="lp-icon">🤖</span><div class="lp-title">Automação Inteligente</div><div class="lp-text">Nosso robô monitora a Hotmilhas todo dia e salva o histórico para você nunca perder o pico de venda.</div></div>""", unsafe_allow_html=True)
+    with col_f2: st.markdown("""<div class="lp-card"><span class="lp-icon">👥</span><div class="lp-title">Radar P2P Exclusivo</div><div class="lp-text">Saiba quanto estão pagando nos grupos fechados. Compare preço oficial x paralelo e venda mais caro.</div></div>""", unsafe_allow_html=True)
+    with col_f3: st.markdown("""<div class="lp-card"><span class="lp-icon">💼</span><div class="lp-title">Controle de Patrimônio</div><div class="lp-text">Registre suas compras. O sistema calcula seu lucro baseado na MELHOR cotação do dia automaticamente.</div></div>""", unsafe_allow_html=True)
 
 # ==============================================================================
-# TELA 2: SISTEMA LOGADO (O QUE VOCÊ JÁ TINHA)
+# TELA 2: SISTEMA LOGADO
 # ==============================================================================
 def sistema_logado():
     user = st.session_state['user']
     plano = user['plano']
-    
     opcoes = ["Dashboard (Mercado)", "Minha Carteira", "Mercado P2P", "Promoções"]
     if plano == "Admin": opcoes.append("👑 Gestão de Usuários")
 
     with st.sidebar:
         st.image(LOGO_URL, width=180)
         st.markdown(f"<div style='text-align: center; margin-top: 10px;'>Olá, <b>{user['nome'].split()[0]}</b></div>", unsafe_allow_html=True)
-        
         if plano == "Admin": st.success("👑 ADMIN")
         elif plano == "Pro": st.success("⭐ PRO")
         else: st.info("🔹 FREE")
-        
         st.divider()
         menu = st.radio("Menu", opcoes)
         st.divider()
@@ -411,7 +377,14 @@ def sistema_logado():
                 delta_perc = ((patrimonio/custo_total)-1)*100 if custo_total > 0 else 0
                 k3.metric("Lucro Projetado", formatar_real(patrimonio - custo_total), delta=f"{delta_perc:.1f}%")
                 st.divider()
-                st.dataframe(pd.DataFrame(view_data).style.applymap(lambda x: 'color: green' if x > 0 else 'color: red', subset=['val_lucro_raw']).drop(columns=['val_lucro_raw']), use_container_width=True)
+                
+                # TABELA CORRIGIDA
+                df_view = pd.DataFrame(view_data)
+                def color_lucro(val):
+                    if isinstance(val, str) and "-" in val: return 'color: red; font-weight: bold;'
+                    return 'color: green; font-weight: bold;'
+
+                st.dataframe(df_view.drop(columns=['val_lucro_raw']).style.applymap(color_lucro, subset=['Lucro (Hoje)']), use_container_width=True)
                 rid = st.number_input("ID para remover", step=1)
                 if st.button("🗑️ Remover Lote"): remover_carteira(rid); st.rerun()
             else: st.info("Carteira vazia.")
