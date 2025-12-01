@@ -4,6 +4,10 @@ import sqlite3
 import hashlib
 import time
 import re
+import asyncio
+import subprocess
+import sys
+import plotly.express as px
 from datetime import datetime
 
 # --- 1. CONFIGURAÇÃO INICIAL ---
@@ -19,9 +23,10 @@ LOGO_URL = "https://raw.githubusercontent.com/jonathanborato/sistema-milhas/main
 # --- 2. CONFIGURAÇÃO SUPABASE ---
 try:
     from supabase import create_client
-    SUPABASE_AVAILABLE = True
+    from playwright.async_api import async_playwright
+    PLAYWRIGHT_AVAILABLE = True
 except ImportError:
-    SUPABASE_AVAILABLE = False
+    PLAYWRIGHT_AVAILABLE = False
 
 def get_supabase():
     if not SUPABASE_AVAILABLE: return None
@@ -40,12 +45,9 @@ def iniciar_banco_local():
     cur = con.cursor()
     cur.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
     cur.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
-    cur.execute('CREATE TABLE IF NOT EXISTS carteira (id INTEGER PRIMARY KEY AUTOINCREMENT, usuario_email TEXT, data_compra TEXT, programa TEXT, quantidade INTEGER, custo_total REAL, cpm_medio REAL)')
-    cur.execute('CREATE TABLE IF NOT EXISTS mercado_p2p (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, grupo_nome TEXT, programa TEXT, tipo TEXT, valor REAL, observacao TEXT)')
-    cur.execute('CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, nome TEXT, senha_hash TEXT, data_cadastro TEXT)')
     con.commit(); con.close()
 
-# --- SEGURANÇA E UTILITÁRIOS ---
+# --- 4. FUNÇÕES DE UTILIDADE E VISUALIZAÇÃO ---
 def criar_hash(senha): return hashlib.sha256(senha.encode()).hexdigest()
 
 def validar_senha_forte(senha):
@@ -56,21 +58,105 @@ def validar_senha_forte(senha):
     if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", senha): return False, "Precisa de caractere especial (@#$)."
     return True, ""
 
-# --- FUNÇÃO DE FORMATAÇÃO (O FIX DO BRL) ---
 def formatar_real(valor):
-    if valor is None or valor == 0: return "R$ 0,00"
+    if valor is None: return "R$ 0,00"
+    s = f"{float(valor):,.2f}"
+    s = s.replace(',', 'X').replace('.', ',').replace('X', '.')
+    return f"R$ {s}"
+
+# --- FUNÇÕES GRÁFICAS (PLOTLY E CARDS) ---
+def plotar_grafico(df, programa):
+    cor = "#0E436B"
+    if "Latam" in programa: cor = "#E30613"
+    elif "Smiles" in programa: cor = "#FF7000"
+    elif "Azul" in programa: cor = "#00AEEF"
+    
+    fig = px.area(df, x="data_hora", y="cpm", markers=True)
+    fig.update_traces(line_color=cor, fillcolor=cor, marker=dict(size=6, color="white", line=dict(width=2, color=cor)))
+    fig.update_layout(height=250, margin=dict(l=0, r=0, t=10, b=0), xaxis_title=None, yaxis_title=None, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", yaxis=dict(showgrid=True, gridcolor='#f0f0f0'), xaxis=dict(showgrid=False), showlegend=False)
+    return fig
+
+def criar_card_preco(titulo, valor, is_winner=False):
+    valor_fmt = formatar_real(valor) if valor > 0 else "--"
+    css_class = "price-card winner-pulse" if is_winner and valor > 0 else "price-card"
+    icon_html = '<span class="winner-icon">🏆</span>' if is_winner and valor > 0 else ""
+    
+    return f"""
+    <div class="{css_class}">
+        <div class="card-title">{titulo} {icon_html}</div>
+        <div class="card-value">{valor_fmt}</div>
+    </div>
+    """
+
+# --- 5. ROBÔ DE COTAÇÃO ---
+async def executar_cotacao_agora():
+    if not PLAYWRIGHT_AVAILABLE:
+        st.error("Biblioteca Playwright não instalada.")
+        return False
+
+    SEU_EMAIL = "jonathanfborato@gmail.com"
+    PROGRAMAS = {"1": "Smiles", "2": "Latam", "3": "Azul"}
+    QTD_MILHAS = "100000"
+    
+    status_text = st.empty()
+    bar = st.progress(0)
+    
     try:
-        # Formata o número com separador de milhares e duas casas decimais
-        s = f"{float(valor):,.2f}"
-        # Troca a vírgula do decimal por 'X', o ponto de milhar por vírgula, e X por ponto (Padrão BR)
-        s = s.replace(',', 'X').replace('.', ',').replace('X', '.')
-        return f"R$ {s}"
-    except ValueError:
-        return "R$ ERR"
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'])
+            context = await browser.new_context()
+            page = await context.new_page()
+            
+            steps = len(PROGRAMAS); current_step = 0
+            
+            for id_prog, nome_prog in PROGRAMAS.items():
+                status_text.text(f"🤖 Robô consultando: {nome_prog}...")
+                
+                try:
+                    await page.goto("https://hotmilhas.com.br/", timeout=60000)
+                    await page.get_by_role("textbox", name="Digite seu e-mail *").fill(SEU_EMAIL)
+                    await page.get_by_role("combobox").select_option(id_prog)
+                    
+                    campo_qtd = page.get_by_role("textbox", name="Quantidade de milhas *")
+                    await campo_qtd.click(); await campo_qtd.fill(QTD_MILHAS)
+                    try: await page.get_by_text("100.000", exact=True).click()
+                    except: await page.keyboard.press("Enter")
 
+                    await page.locator("#form").get_by_role("button", name="Cotar minhas milhas").click(force=True)
+                    
+                    try: await page.wait_for_selector("text=R$", timeout=15000)
+                    except: pass
 
-# --- 4. FUNÇÕES DE DADOS (NUVEM) ---
+                    texto = await page.locator("body").inner_text()
+                    padrao = r"(?:em|Até)\s+(90)\s+dia[s]?.*?R\$\s?([\d\.,]+)"
+                    match = re.search(padrao, texto, re.DOTALL | re.IGNORECASE)
+                    
+                    if match:
+                        valor_float = float(match.group(2).replace('.', '').replace(',', '.'))
+                        cpm = valor_float / 100
+                        
+                        con = conectar_local()
+                        agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        con.execute('INSERT INTO historico (data_hora, email, prazo_dias, valor_total, cpm) VALUES (?, ?, ?, ?, ?)', (agora, nome_prog, 90, valor_float, cpm))
+                        con.commit(); con.close()
+                        
+                except Exception as e:
+                    print(f"Erro ao cotar {nome_prog}: {e}")
+                
+                await context.clear_cookies()
+                current_step += 1
+                bar.progress(int((current_step / steps) * 100))
+            
+            await browser.close()
+            status_text.empty()
+            bar.empty()
+            return True
+            
+    except Exception as e:
+        st.error(f"Erro ao iniciar robô: {e}")
+        return False
 
+# --- 6. FUNÇÕES DE DADOS (DIVERSAS) ---
 def adicionar_p2p(g, p, t, v, o):
     sb = get_supabase()
     if not sb: return False, "Erro de conexão."
@@ -138,7 +224,7 @@ def registrar_usuario(nome, email, senha, telefone):
     try:
         res = sb.table("usuarios").select("id").eq("email", email).execute()
         if len(res.data) > 0: return False, "E-mail já cadastrado."
-        dados = {"email": email, "nome": nome, "senha_hash": hashlib.sha256(senha.encode()).hexdigest(), "telefone": telefone, "plano": "Free", "status": "Ativo"}
+        dados = {"email": email, "nome": nome, "senha_hash": criar_hash(senha), "telefone": telefone, "plano": "Free", "status": "Ativo"}
         sb.table("usuarios").insert(dados).execute()
         return True, "Conta criada!"
     except Exception as e: return False, f"Erro: {e}"
@@ -147,7 +233,7 @@ def autenticar_usuario(email, senha):
     sb = get_supabase()
     if not sb: return None
     try:
-        h = hashlib.sha256(senha.encode()).hexdigest()
+        h = criar_hash(senha)
         res = sb.table("usuarios").select("*").eq("email", email).eq("senha_hash", h).execute()
         if len(res.data) > 0:
             u = res.data[0]
@@ -179,14 +265,26 @@ def admin_resetar_senha(id_user, nova_senha_texto):
 # --- INICIALIZA ---
 iniciar_banco_local()
 
-# --- CSS ---
+# --- CSS E ANIMAÇÕES ---
 st.markdown("""
 <style>
+    /* Corrige o cabeçalho cortado e adiciona um espaço respirável */
     .block-container {padding-top: 4rem !important; padding-bottom: 2rem !important;}
+    
+    /* Botões */
     div.stButton > button {width: 100%; background-color: #0E436B; color: white; border-radius: 5px; font-weight: bold;}
     div.stButton > button:hover {background-color: #082d4a; color: white;}
     div[data-testid="stImage"] {display: flex; justify-content: center; align-items: center; width: 100%;}
-    .metric-card {background: #f0f2f6; padding: 15px; border-radius: 8px;}
+    
+    /* Animações e Estilos dos Cards de Preço */
+    @keyframes pulse-green { 0% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(37, 211, 102, 0); } 100% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0); } }
+    @keyframes spin-slow { 0% { transform: rotate(0deg); } 25% { transform: rotate(15deg); } 75% { transform: rotate(-15deg); } 100% { transform: rotate(0deg); } }
+    
+    .price-card { background: #f8f9fa; padding: 15px; border-radius: 10px; border: 1px solid #dee2e6; text-align: center; margin-bottom: 10px; }
+    .winner-pulse { border: 2px solid #25d366 !important; background: #f0fff4 !important; animation: pulse-green 2s infinite; color: #0E436B; }
+    .card-title { font-size: 0.85rem; color: #6c757d; margin-bottom: 5px; }
+    .card-value { font-size: 1.4rem; font-weight: 800; color: #212529; }
+    .winner-icon { display: inline-block; animation: spin-slow 3s infinite ease-in-out; margin-left: 5px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -196,66 +294,6 @@ def mostrar_paywall():
 
 # --- SESSÃO ---
 if 'user' not in st.session_state: st.session_state['user'] = None
-
-# --- ROBÔ DE COTAÇÃO (INTERNO) ---
-async def executar_cotacao_agora():
-    try:
-        from playwright.async_api import async_playwright
-    except ImportError:
-        st.error("Biblioteca Playwright não instalada. Instale via requirements.txt e reinicie.")
-        return False
-
-    SEU_EMAIL = "jonathanfborato@gmail.com"
-    PROGRAMAS = {"1": "Smiles", "2": "Latam", "3": "Azul"}
-    QTD_MILHAS = "100000"
-    
-    status_text = st.empty()
-    bar = st.progress(0)
-    
-    try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'])
-            context = await browser.new_context()
-            page = await context.new_page()
-            steps = len(PROGRAMAS); current_step = 0
-            
-            for id_prog, nome_prog in PROGRAMAS.items():
-                status_text.text(f"🤖 Robô consultando: {nome_prog}...")
-                
-                try:
-                    await page.goto("https://hotmilhas.com.br/", timeout=60000)
-                    await page.get_by_role("textbox", name="Digite seu e-mail *").fill(SEU_EMAIL)
-                    await page.get_by_role("combobox").select_option(id_prog)
-                    campo_qtd = page.get_by_role("textbox", name="Quantidade de milhas *")
-                    await campo_qtd.click(); await campo_qtd.fill(QTD_MILHAS)
-                    try: await page.get_by_text("100.000", exact=True).click()
-                    except: await page.keyboard.press("Enter")
-                    await page.locator("#form").get_by_role("button", name="Cotar minhas milhas").click(force=True)
-                    try: await page.wait_for_selector("text=R$", timeout=15000)
-                    except: pass
-
-                    texto = await page.locator("body").inner_text()
-                    padrao = r"(?:em|Até)\s+(90)\s+dia[s]?.*?R\$\s?([\d\.,]+)"
-                    match = re.search(padrao, texto, re.DOTALL | re.IGNORECASE)
-                    
-                    if match:
-                        valor_float = float(match.group(2).replace('.', '').replace(',', '.'))
-                        cpm = valor_float / 100
-                        con = conectar_local()
-                        agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        con.execute('INSERT INTO historico (data_hora, email, prazo_dias, valor_total, cpm) VALUES (?, ?, ?, ?, ?)', (agora, nome_prog, 90, valor_float, cpm))
-                        con.commit(); con.close()
-                except Exception as e:
-                    print(f"Erro {nome_prog}: {e}")
-                
-                await context.clear_cookies(); current_step += 1
-                bar.progress(int((current_step / steps) * 100))
-            
-            await browser.close(); status_text.empty(); bar.empty()
-            return True
-    except Exception as e:
-        st.error(f"Erro ao iniciar robô: {e}")
-        return False
 
 # ==============================================================================
 # TELA DE LOGIN
@@ -305,11 +343,9 @@ def sistema_logado():
         st.markdown(f"""<div style="display: flex; justify-content: center; margin-bottom: 15px;"><img src="{LOGO_URL}" style="width: 200px; max-width: 100%;"></div>""", unsafe_allow_html=True)
         st.markdown(f"<div style='text-align: center; margin-top: -10px;'>Olá, <b>{user['nome'].split()[0]}</b></div>", unsafe_allow_html=True)
         st.caption(f"Nuvem: {'🟢 Online' if get_supabase() else '🔴 Offline'}")
-        
         if plano == "Admin": st.success("👑 ADMIN")
         elif plano == "Pro": st.success("⭐ PRO")
         else: st.info("🔹 FREE")
-        
         st.divider()
         menu = st.radio("Menu", opcoes)
         st.divider()
@@ -323,7 +359,7 @@ def sistema_logado():
         with col_title:
             st.header("📊 Visão de Mercado")
         with col_btn:
-            if st.button("🔄 Atualizar Cotações"):
+            if st.button("🔄 Atualizar Agora"):
                 if not PLAYWRIGHT_AVAILABLE: st.error("ERRO: Playwright não está pronto. Reinicie o App para instalar dependências.")
                 else:
                     with st.spinner("Robô consultando Hotmilhas em tempo real... (Aguarde 40s)"):
@@ -331,6 +367,7 @@ def sistema_logado():
                         if sucesso:
                             st.success("Atualizado!")
                             st.cache_data.clear()
+                            time.sleep(1)
                             st.rerun()
                         else: st.error("Erro ao rodar robô.")
 
