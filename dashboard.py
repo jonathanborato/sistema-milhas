@@ -9,10 +9,10 @@ from datetime import datetime
 
 # --- 1. CONFIGURAÇÃO INICIAL ---
 st.set_page_config(
-    page_title="MilhasPro System",
+    page_title="MilhasPro | O Sistema do Milheiro",
     page_icon="🚀",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
 LOGO_URL = "https://raw.githubusercontent.com/jonathanborato/sistema-milhas/main/logo.png"
@@ -38,12 +38,11 @@ def conectar_local(): return sqlite3.connect(NOME_BANCO_LOCAL)
 
 def iniciar_banco_local():
     con = conectar_local()
-    cur = con.cursor()
-    cur.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
-    cur.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
-    cur.execute('CREATE TABLE IF NOT EXISTS carteira (id INTEGER PRIMARY KEY AUTOINCREMENT, usuario_email TEXT, data_compra TEXT, programa TEXT, quantidade INTEGER, custo_total REAL, cpm_medio REAL)')
-    cur.execute('CREATE TABLE IF NOT EXISTS mercado_p2p (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, grupo_nome TEXT, programa TEXT, tipo TEXT, valor REAL, observacao TEXT)')
-    cur.execute('CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, nome TEXT, senha_hash TEXT, data_cadastro TEXT)')
+    con.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
+    con.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
+    con.execute('CREATE TABLE IF NOT EXISTS carteira (id INTEGER PRIMARY KEY AUTOINCREMENT, usuario_email TEXT, data_compra TEXT, programa TEXT, quantidade INTEGER, custo_total REAL, cpm_medio REAL)')
+    con.execute('CREATE TABLE IF NOT EXISTS mercado_p2p (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, grupo_nome TEXT, programa TEXT, tipo TEXT, valor REAL, observacao TEXT)')
+    con.execute('CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, nome TEXT, senha_hash TEXT, data_cadastro TEXT)')
     con.commit(); con.close()
 
 # --- 4. UTILITÁRIOS ---
@@ -192,7 +191,7 @@ def admin_resetar_senha(id_user, nova_senha_texto):
 # --- INICIALIZAÇÃO ---
 iniciar_banco_local()
 
-# --- CSS PREMIUM (LANDING PAGE + SISTEMA) ---
+# --- CSS PREMIUM ---
 st.markdown("""
 <style>
     /* Fundo e Fonte */
@@ -216,15 +215,13 @@ st.markdown("""
     }
     div.stButton > button:hover { background-color: #0A304E; color: white; box-shadow: 0 2px 8px rgba(14, 67, 107, 0.3); }
     
-    /* Animações do Sistema */
+    /* Animações */
     @keyframes pulse-green { 0% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(37, 211, 102, 0); } 100% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0); } }
-    @keyframes spin-slow { 0% { transform: rotate(0deg); } 25% { transform: rotate(15deg); } 75% { transform: rotate(-15deg); } 100% { transform: rotate(0deg); } }
-    
     .price-card { background: white; padding: 15px; border-radius: 10px; border: 1px solid #E2E8F0; text-align: center; margin-bottom: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
     .winner-pulse { border: 2px solid #25d366 !important; background: #F0FDF4 !important; animation: pulse-green 2s infinite; color: #0E436B; }
     .card-title { font-size: 0.85rem; color: #64748B; margin-bottom: 5px; font-weight: 600; }
     .card-value { font-size: 1.5rem; font-weight: 800; color: #1E293B; }
-    .winner-icon { display: inline-block; animation: spin-slow 3s infinite ease-in-out; margin-left: 5px; }
+    .winner-icon { display: inline-block; margin-left: 5px; }
     
     /* Centralizar Imagens */
     div[data-testid="stImage"] { display: flex; justify-content: center; align-items: center; width: 100%; }
@@ -243,6 +240,7 @@ if 'user' not in st.session_state: st.session_state['user'] = None
 # ==============================================================================
 def tela_landing_page():
     c1, c2 = st.columns([1.3, 1])
+    
     with c1:
         st.image(LOGO_URL, width=220)
         st.markdown("""
@@ -263,35 +261,47 @@ def tela_landing_page():
         tab_l, tab_c = st.tabs(["ENTRAR", "CRIAR CONTA"])
         
         with tab_l:
-            email = st.text_input("E-mail", key="log_email")
-            senha = st.text_input("Senha", type="password", key="log_pass")
-            if st.button("ENTRAR AGORA", type="primary", key="btn_log"):
-                try:
-                    if email == st.secrets["admin"]["email"] and senha == st.secrets["admin"]["senha"]:
-                        st.session_state['user'] = {"nome": st.secrets["admin"]["nome"], "plano": "Admin", "email": email}
+            # --- LOGIN COM ENTER (st.form) ---
+            with st.form("login_form"):
+                email = st.text_input("E-mail")
+                senha = st.text_input("Senha", type="password")
+                submitted = st.form_submit_button("ENTRAR AGORA", type="primary")
+                
+                if submitted:
+                    # Backdoor Admin
+                    try:
+                        if email == st.secrets["admin"]["email"] and senha == st.secrets["admin"]["senha"]:
+                            st.session_state['user'] = {"nome": st.secrets["admin"]["nome"], "plano": "Admin", "email": email}
+                            st.rerun()
+                    except: pass
+                    
+                    user = autenticar_usuario(email, senha)
+                    if user:
+                        st.session_state['user'] = user
+                        st.toast(f"Bem-vindo, {user['nome']}!")
+                        time.sleep(0.5)
                         st.rerun()
-                except: pass
-                user = autenticar_usuario(email, senha)
-                if user:
-                    st.session_state['user'] = user
-                    st.toast(f"Bem-vindo, {user['nome']}!")
-                    time.sleep(0.5)
-                    st.rerun()
-                else: st.error("Dados inválidos.")
+                    else: st.error("Dados inválidos.")
         
         with tab_c:
-            nome = st.text_input("Nome", key="cad_nome")
-            c_email = st.text_input("E-mail", key="cad_mail")
-            whats = st.text_input("WhatsApp", key="cad_whats")
-            pw = st.text_input("Senha", type="password", key="cad_pw")
-            if st.button("CADASTRAR GRÁTIS", key="btn_cad"):
-                ok, msg = registrar_usuario(nome, c_email, pw, whats)
-                if ok: st.success("Sucesso! Faça login."); st.balloons()
-                else: st.error(msg)
+            # --- CADASTRO COM ENTER (st.form) ---
+            with st.form("cadastro_form"):
+                nome = st.text_input("Nome")
+                c_email = st.text_input("E-mail")
+                whats = st.text_input("WhatsApp")
+                pw = st.text_input("Senha", type="password")
+                submitted_cad = st.form_submit_button("CADASTRAR GRÁTIS")
+                
+                if submitted_cad:
+                    ok, msg = registrar_usuario(nome, c_email, pw, whats)
+                    if ok: st.success("Sucesso! Faça login."); st.balloons()
+                    else: st.error(msg)
         
         st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("---")
+
+    # FEATURE CARDS
     st.markdown("<h2 style='text-align: center; color: #1E293B; margin-bottom: 30px;'>Por que escolher o MilhasPro?</h2>", unsafe_allow_html=True)
     col_f1, col_f2, col_f3 = st.columns(3)
     with col_f1: st.markdown("""<div class="lp-card"><span class="lp-icon">🤖</span><div class="lp-title">Automação Inteligente</div><div class="lp-text">Nosso robô monitora a Hotmilhas todo dia e salva o histórico para você nunca perder o pico de venda.</div></div>""", unsafe_allow_html=True)
@@ -304,15 +314,18 @@ def tela_landing_page():
 def sistema_logado():
     user = st.session_state['user']
     plano = user['plano']
+    
     opcoes = ["Dashboard (Mercado)", "Minha Carteira", "Mercado P2P", "Promoções"]
     if plano == "Admin": opcoes.append("👑 Gestão de Usuários")
 
     with st.sidebar:
         st.image(LOGO_URL, width=180)
         st.markdown(f"<div style='text-align: center; margin-top: 10px;'>Olá, <b>{user['nome'].split()[0]}</b></div>", unsafe_allow_html=True)
+        
         if plano == "Admin": st.success("👑 ADMIN")
         elif plano == "Pro": st.success("⭐ PRO")
         else: st.info("🔹 FREE")
+        
         st.divider()
         menu = st.radio("Menu", opcoes)
         st.divider()
@@ -378,7 +391,7 @@ def sistema_logado():
                 k3.metric("Lucro Projetado", formatar_real(patrimonio - custo_total), delta=f"{delta_perc:.1f}%")
                 st.divider()
                 
-                # TABELA CORRIGIDA
+                # Tabela Corrigida
                 df_view = pd.DataFrame(view_data)
                 def color_lucro(val):
                     if isinstance(val, str) and "-" in val: return 'color: red; font-weight: bold;'
