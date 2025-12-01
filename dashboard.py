@@ -4,6 +4,7 @@ import sqlite3
 import hashlib
 import time
 import re
+import plotly.express as px # BIBLIOTECA DE GRÁFICOS MODERNOS
 from datetime import datetime
 
 # --- 1. CONFIGURAÇÃO INICIAL ---
@@ -46,20 +47,59 @@ def criar_hash(senha): return hashlib.sha256(senha.encode()).hexdigest()
 
 def validar_senha_forte(senha):
     if len(senha) < 8: return False, "Mínimo 8 caracteres."
-    if not re.search(r"[a-z]", senha): return False, "Precisa de letra minúscula."
-    if not re.search(r"[A-Z]", senha): return False, "Precisa de letra maiúscula."
-    if not re.search(r"[0-9]", senha): return False, "Precisa de número."
-    if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", senha): return False, "Precisa de caractere especial (@#$)."
     return True, ""
 
-# --- NOVA FUNÇÃO: FORMATAÇÃO BRASILEIRA R$ ---
 def formatar_real(valor):
     if valor is None: return "R$ 0,00"
-    # Formata primeiro como padrão americano (1,234.56)
     s = f"{float(valor):,.2f}"
-    # Troca vírgula por X, ponto por vírgula, X por ponto
     s = s.replace(',', 'X').replace('.', ',').replace('X', '.')
     return f"R$ {s}"
+
+# --- FUNÇÃO DE GRÁFICO MODERNO (PLOTLY) ---
+def plotar_grafico_moderno(df, programa):
+    if df.empty: return None
+    
+    # Define cor baseada na marca
+    cor_marca = "#0E436B" # Padrão Azul
+    if "Latam" in programa: cor_marca = "#E30613" # Vermelho Latam
+    elif "Smiles" in programa: cor_marca = "#FF7000" # Laranja Smiles
+    elif "Azul" in programa: cor_marca = "#00AEEF" # Azul Claro
+    
+    # Cria o gráfico de área
+    fig = px.area(
+        df, 
+        x="data_hora", 
+        y="cpm",
+        title=None,
+        markers=True,
+    )
+    
+    # Estilização Profissional (Fintech Style)
+    fig.update_traces(
+        line_color=cor_marca,
+        marker=dict(size=6, color="white", line=dict(width=2, color=cor_marca)),
+        fillcolor=cor_marca,
+        fill='tozeroy',
+        hovertemplate='<b>Data:</b> %{x|%d/%m %H:%M}<br><b>Valor:</b> R$ %{y:.2f}<extra></extra>' # Tooltip bonito
+    )
+    
+    # Remove grades e deixa limpo
+    fig.update_layout(
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        xaxis_title=None,
+        yaxis_title=None,
+        margin=dict(l=0, r=0, t=10, b=0),
+        hovermode="x unified",
+        showlegend=False,
+        yaxis=dict(showgrid=True, gridcolor='#f0f0f0'), # Grade suave apenas horizontal
+        height=250
+    )
+    
+    # Ajuste de transparência no preenchimento (gradiente fake)
+    fig.data[0].update(opacity=0.3)
+    
+    return fig
 
 # --- 4. FUNÇÕES DE DADOS ---
 
@@ -212,6 +252,7 @@ def tela_login():
                     st.session_state['user'] = user
                     st.success("Login OK!"); time.sleep(0.5); st.rerun()
                 else: st.error("Acesso negado.")
+        
         with tab2:
             nome = st.text_input("Nome", key="cad_nome")
             email_c = st.text_input("E-mail", key="cad_mail")
@@ -265,10 +306,16 @@ def sistema_logado():
                     with mc1: st.metric("🤖 Hotmilhas", formatar_real(val_hot) if val_hot > 0 else "--")
                     with mc2: st.metric("👥 P2P", formatar_real(val_p2p) if val_p2p > 0 else "--")
                     st.divider()
-                    if not d.empty: st.line_chart(d, x="data_hora", y="cpm", height=200)
+                    
+                    # GRÁFICO MODERNO (PLOTLY)
+                    if not d.empty:
+                        st.plotly_chart(plotar_grafico_moderno(d, p), use_container_width=True)
+                    else:
+                        st.caption("Sem histórico suficiente para gráfico.")
+                        
         else: st.warning("Aguardando robô.")
 
-    # --- CARTEIRA (COM FORMATAÇÃO BR) ---
+    # --- CARTEIRA ---
     elif menu == "Minha Carteira":
         st.header("💼 Carteira")
         if plano == "Free": mostrar_paywall()
@@ -292,15 +339,12 @@ def sistema_logado():
                 
                 for _, row in dfc.iterrows():
                     prog_nome = row['programa'].split()[0]
-                    # Busca Cotações
                     val_hot = 0.0
                     if not df_cotacoes.empty:
                         f = df_cotacoes[df_cotacoes['programa'].str.contains(prog_nome, case=False, na=False)]
                         if not f.empty: val_hot = f.iloc[-1]['cpm']
                     
                     val_p2p = pegar_ultimo_p2p(prog_nome)
-                    
-                    # Valuation
                     melhor_preco = max(val_hot, val_p2p)
                     origem = "Hotmilhas" if val_hot >= val_p2p else "P2P"
                     if melhor_preco == 0: origem = "Sem Cotação"
@@ -315,19 +359,17 @@ def sistema_logado():
                     patrimonio += val_venda
                     custo_total += custo
                     
-                    # AQUI APLICAMOS A FORMATAÇÃO NAS STRINGS DA TABELA
                     view_data.append({
                         "ID": row['id'], 
                         "Programa": row['programa'], 
-                        "Qtd": f"{qtd:,.0f}".replace(',', '.'), # Milhar com ponto
+                        "Qtd": f"{qtd:,.0f}".replace(',', '.'), 
                         "Custo": formatar_real(custo),
                         "CPM Pago": formatar_real(cpm_pago), 
                         "Melhor Cotação": f"{formatar_real(melhor_preco)} ({origem})",
                         "Lucro (Hoje)": formatar_real(lucro),
-                        "val_lucro_raw": lucro # Coluna escondida para usar na cor
+                        "val_lucro_raw": lucro
                     })
                 
-                # KPIs COM FORMATAÇÃO BR
                 k1, k2, k3 = st.columns(3)
                 k1.metric("Total Investido", formatar_real(custo_total))
                 k2.metric("Patrimônio Atual", formatar_real(patrimonio))
@@ -336,22 +378,15 @@ def sistema_logado():
                 
                 st.divider()
                 
-                # TABELA COLORIDA
                 df_view = pd.DataFrame(view_data)
-                
-                # Função de estilo para colorir a coluna de lucro (que agora é texto)
                 def color_lucro(val):
-                    # Gambiarra segura: remove R$ e converte pra float pra saber a cor
                     try:
                         num = float(val.replace('R$', '').replace('.', '').replace(',', '.').strip())
-                        color = '#d4edda' if num > 0 else '#f8d7da' # Fundo verde ou vermelho claro
+                        color = '#d4edda' if num > 0 else '#f8d7da'
                         return f'background-color: {color}; color: black; font-weight: bold;'
                     except: return ''
 
-                st.dataframe(
-                    df_view.drop(columns=['val_lucro_raw']).style.applymap(color_lucro, subset=['Lucro (Hoje)']), 
-                    use_container_width=True
-                )
+                st.dataframe(df_view.drop(columns=['val_lucro_raw']).style.applymap(color_lucro, subset=['Lucro (Hoje)']), use_container_width=True)
                 
                 rid = st.number_input("ID para remover", step=1)
                 if st.button("🗑️ Remover Lote"):
@@ -381,7 +416,6 @@ def sistema_logado():
 
         dfp = ler_p2p_todos()
         if not dfp.empty:
-            # Formata a coluna Valor
             dfp['valor'] = dfp['valor'].apply(formatar_real)
             st.dataframe(dfp, use_container_width=True)
 
