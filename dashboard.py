@@ -52,18 +52,14 @@ def validar_senha_forte(senha):
     if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", senha): return False, "Precisa de caractere especial (@#$)."
     return True, ""
 
-# --- 4. FUNÇÕES DE DADOS (NUVEM OBRIGATÓRIA) ---
+# --- 4. FUNÇÕES DE DADOS ---
 
-# A) P2P (SIMPLIFICADO: SÓ REGISTRA 'COMPRA')
+# A) P2P (COMPRA)
 def adicionar_p2p(g, p, v, o):
     sb = get_supabase()
     if not sb: return False, "Erro de conexão."
     try:
-        # Forçamos o tipo para 'COMPRA' (O mercado comprando de você)
-        dados = {
-            "data_hora": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "grupo_nome": g, "programa": p, "tipo": "COMPRA", "valor": float(v), "observacao": o
-        }
+        dados = {"data_hora": datetime.now().strftime("%Y-%m-%d %H:%M"), "grupo_nome": g, "programa": p, "tipo": "COMPRA", "valor": float(v), "observacao": o}
         sb.table("mercado_p2p").insert(dados).execute()
         return True, "Sucesso"
     except Exception as e: return False, str(e)
@@ -80,7 +76,6 @@ def pegar_ultimo_p2p(programa):
     sb = get_supabase()
     if not sb: return 0.0
     try:
-        # Pega o último registro inserido para este programa (ID DESC)
         res = sb.table("mercado_p2p").select("valor").ilike("programa", f"%{programa}%").order("id", desc=True).limit(1).execute()
         if len(res.data) > 0: return float(res.data[0]['valor'])
     except: pass
@@ -92,10 +87,7 @@ def adicionar_carteira(email, p, q, v):
     if not sb: return False, "Erro conexão."
     try:
         cpm = float(v) / (float(q) / 1000) if float(q) > 0 else 0
-        dados = {
-            "usuario_email": email, "data_compra": datetime.now().strftime("%Y-%m-%d"),
-            "programa": p, "quantidade": int(q), "custo_total": float(v), "cpm_medio": cpm
-        }
+        dados = {"usuario_email": email, "data_compra": datetime.now().strftime("%Y-%m-%d"), "programa": p, "quantidade": int(q), "custo_total": float(v), "cpm_medio": cpm}
         sb.table("carteira").insert(dados).execute()
         return True, "Sucesso"
     except Exception as e: return False, str(e)
@@ -174,16 +166,69 @@ def admin_resetar_senha(id_user, nova_senha_texto):
 # --- INICIALIZA ---
 iniciar_banco_local()
 
-# --- CSS ---
+# --- CSS E ANIMAÇÕES ---
 st.markdown("""
 <style>
     .block-container {padding-top: 4rem !important; padding-bottom: 2rem !important;}
     div.stButton > button {width: 100%; background-color: #0E436B; color: white; border-radius: 5px; font-weight: bold;}
     div.stButton > button:hover {background-color: #082d4a; color: white;}
     div[data-testid="stImage"] {display: flex; justify-content: center; align-items: center; width: 100%;}
-    .metric-card {background: #f0f2f6; padding: 15px; border-radius: 8px;}
+    
+    /* Animação de Pulso Verde */
+    @keyframes pulse-green {
+        0% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0.7); }
+        70% { box-shadow: 0 0 0 10px rgba(37, 211, 102, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0); }
+    }
+    
+    /* Animação de Giro Lento para o Troféu */
+    @keyframes spin-slow {
+        0% { transform: rotate(0deg); }
+        25% { transform: rotate(15deg); }
+        50% { transform: rotate(0deg); }
+        75% { transform: rotate(-15deg); }
+        100% { transform: rotate(0deg); }
+    }
+
+    /* Estilo Base do Card de Preço */
+    .price-card {
+        background: #f8f9fa;
+        padding: 15px;
+        border-radius: 10px;
+        border: 2px solid #e9ecef;
+        text-align: center;
+        transition: all 0.3s ease;
+    }
+    
+    /* Estilo do Card Vencedor */
+    .winner-pulse {
+        border: 2px solid #25d366 !important; /* Borda Verde */
+        background: #f0fff4 !important; /* Fundo Verde Claro */
+        animation: pulse-green 2s infinite;
+        font-weight: bold;
+        color: #0E436B;
+    }
+
+    .card-title { font-size: 0.9rem; color: #6c757d; margin-bottom: 5px; }
+    .card-value { font-size: 1.6rem; font-weight: 800; color: #212529; }
+    .winner-icon { display: inline-block; animation: spin-slow 3s infinite ease-in-out; margin-left: 8px; font-size: 1.2rem;}
+
 </style>
 """, unsafe_allow_html=True)
+
+# --- FUNÇÃO AUXILIAR PARA GERAR CARD ANIMADO ---
+def criar_card_preco(titulo, valor, is_winner=False):
+    valor_fmt = f"R$ {valor:.2f}" if valor > 0 else "--"
+    css_class = "price-card winner-pulse" if is_winner and valor > 0 else "price-card"
+    icon_html = '<span class="winner-icon">🏆</span>' if is_winner and valor > 0 else ""
+    
+    html = f"""
+    <div class="{css_class}">
+        <div class="card-title">{titulo} {icon_html}</div>
+        <div class="card-value">{valor_fmt}</div>
+    </div>
+    """
+    return html
 
 def mostrar_paywall():
     st.error("🔒 RECURSO PRO")
@@ -253,9 +298,11 @@ def sistema_logado():
 
     df_cotacoes = ler_dados_historico()
 
-    # --- DASHBOARD ---
+    # --- DASHBOARD (COM ANIMAÇÃO) ---
     if menu == "Dashboard (Mercado)":
         st.header("📊 Visão de Mercado")
+        st.markdown("Compare as cotações e veja onde suas milhas valem mais agora.")
+        st.divider()
         if not df_cotacoes.empty:
             cols = st.columns(3)
             for i, p in enumerate(["Latam", "Smiles", "Azul"]):
@@ -263,11 +310,20 @@ def sistema_logado():
                 val_hot = d.iloc[-1]['cpm'] if not d.empty else 0.0
                 val_p2p = pegar_ultimo_p2p(p)
                 
+                # Lógica de quem ganha
+                hot_wins = val_hot > val_p2p and val_hot > 0
+                p2p_wins = val_p2p > val_hot and val_p2p > 0
+                # Se empate, ninguém ganha destaque
+                
                 with cols[i]:
-                    st.markdown(f"### {p}")
+                    st.subheader(f"{p}")
                     mc1, mc2 = st.columns(2)
-                    with mc1: st.metric("🤖 Hotmilhas", f"R$ {val_hot:.2f}" if val_hot > 0 else "--")
-                    with mc2: st.metric("👥 P2P", f"R$ {val_p2p:.2f}" if val_p2p > 0 else "--")
+                    with mc1:
+                        # Usa a função auxiliar para gerar o HTML animado
+                        st.markdown(criar_card_preco("🤖 Hotmilhas", val_hot, hot_wins), unsafe_allow_html=True)
+                    with mc2:
+                        st.markdown(criar_card_preco("👥 P2P (Grupos)", val_p2p, p2p_wins), unsafe_allow_html=True)
+                        
                     st.divider()
                     if not d.empty: st.line_chart(d, x="data_hora", y="cpm", height=200)
         else: st.warning("Aguardando robô.")
@@ -296,15 +352,12 @@ def sistema_logado():
                 
                 for _, row in dfc.iterrows():
                     prog_nome = row['programa'].split()[0]
-                    # Busca Cotações
                     val_hot = 0.0
                     if not df_cotacoes.empty:
                         f = df_cotacoes[df_cotacoes['programa'].str.contains(prog_nome, case=False, na=False)]
                         if not f.empty: val_hot = f.iloc[-1]['cpm']
                     
                     val_p2p = pegar_ultimo_p2p(prog_nome)
-                    
-                    # Valuation: Pega o maior valor (Hotmilhas ou P2P)
                     melhor_preco = max(val_hot, val_p2p)
                     origem = "Hotmilhas" if val_hot >= val_p2p else "P2P"
                     if melhor_preco == 0: origem = "Sem Cotação"
@@ -312,34 +365,29 @@ def sistema_logado():
                     qtd = float(row['quantidade'])
                     custo = float(row['custo_total'])
                     cpm_pago = float(row['cpm_medio'])
-                    
                     val_venda = (qtd / 1000) * melhor_preco
                     lucro = val_venda - custo
-                    
                     patrimonio += val_venda
                     custo_total += custo
                     
                     view_data.append({
                         "ID": row['id'], "Programa": row['programa'], "Qtd": f"{qtd:,.0f}",
                         "Custo": custo, "CPM Pago": cpm_pago, 
-                        "Melhor Cotação": f"R$ {melhor_preco:.2f}", "Lucro (Hoje)": lucro
+                        "Melhor Cotação": f"R$ {melhor_preco:.2f} ({origem})", "Lucro (Hoje)": lucro
                     })
                 
                 k1, k2, k3 = st.columns(3)
                 k1.metric("Total Investido", f"R$ {custo_total:,.2f}")
                 k2.metric("Patrimônio Atual", f"R$ {patrimonio:,.2f}")
-                k3.metric("Lucro Projetado", f"R$ {patrimonio - custo_total:,.2f}", 
-                          delta=f"{((patrimonio/custo_total)-1)*100:.1f}%" if custo_total > 0 else 0)
+                delta_perc = ((patrimonio/custo_total)-1)*100 if custo_total > 0 else 0
+                k3.metric("Lucro Projetado", f"R$ {patrimonio - custo_total:,.2f}", delta=f"{delta_perc:.1f}%")
                 
                 st.divider()
                 st.dataframe(pd.DataFrame(view_data).style.format({"Custo": "R$ {:,.2f}", "CPM Pago": "R$ {:,.2f}", "Lucro (Hoje)": "R$ {:,.2f}"}).applymap(lambda x: 'color: green' if x > 0 else 'color: red', subset=['Lucro (Hoje)']), use_container_width=True)
                 
                 rid = st.number_input("ID para remover", step=1)
-                if st.button("🗑️ Remover Lote"):
-                    remover_carteira(rid)
-                    st.rerun()
-            else:
-                st.info("Sua carteira está vazia.")
+                if st.button("🗑️ Remover Lote"): remover_carteira(rid); st.rerun()
+            else: st.info("Sua carteira está vazia.")
 
     # --- P2P ---
     elif menu == "Mercado P2P":
@@ -350,7 +398,6 @@ def sistema_logado():
                 c1, c2 = st.columns(2)
                 g = c1.text_input("Grupo de Origem (Ex: Balcão Milhas)")
                 p = c2.selectbox("Programa", ["Latam", "Smiles", "Azul"])
-                # REMOVIDO SELECT "TIPO". AGORA É SEMPRE OFERTA DE COMPRA
                 val = st.number_input("Valor Ofertado (R$)", 15.0)
                 obs = st.text_input("Obs (Ex: Pagamento imediato)")
                 if st.form_submit_button("Publicar Oferta"):
