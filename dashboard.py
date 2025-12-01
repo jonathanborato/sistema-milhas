@@ -4,7 +4,7 @@ import sqlite3
 import hashlib
 import time
 import re
-import plotly.express as px # GRÁFICOS MODERNOS
+import plotly.express as px
 from datetime import datetime
 
 # --- 1. CONFIGURAÇÃO INICIAL ---
@@ -50,7 +50,6 @@ def validar_senha_forte(senha):
     if not re.search(r"[a-z]", senha): return False, "Precisa de letra minúscula."
     if not re.search(r"[A-Z]", senha): return False, "Precisa de letra maiúscula."
     if not re.search(r"[0-9]", senha): return False, "Precisa de número."
-    if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", senha): return False, "Precisa de caractere especial (@#$)."
     return True, ""
 
 def formatar_real(valor):
@@ -59,25 +58,38 @@ def formatar_real(valor):
     s = s.replace(',', 'X').replace('.', ',').replace('X', '.')
     return f"R$ {s}"
 
-# --- FUNÇÃO DE GRÁFICO (PLOTLY) ---
+# --- FUNÇÃO VISUAL: CARD ANIMADO ---
+def criar_card_preco(titulo, valor, is_winner=False):
+    valor_fmt = formatar_real(valor) if valor > 0 else "--"
+    
+    # CSS Classes para animação
+    css_class = "price-card winner-pulse" if is_winner and valor > 0 else "price-card"
+    icon_html = '<span class="winner-icon">🏆</span>' if is_winner and valor > 0 else ""
+    
+    # HTML do Card
+    html = f"""
+    <div class="{css_class}">
+        <div class="card-title">{titulo} {icon_html}</div>
+        <div class="card-value">{valor_fmt}</div>
+    </div>
+    """
+    return html
+
+# --- FUNÇÃO GRÁFICA: PLOTLY ---
 def plotar_grafico(df, programa):
-    # Cores Oficiais das Companhias
-    cor = "#0E436B" # Padrão
-    if "Latam" in programa: cor = "#E30613" # Vermelho
-    elif "Smiles" in programa: cor = "#FF7000" # Laranja
-    elif "Azul" in programa: cor = "#00AEEF" # Azul
+    cor = "#0E436B"
+    if "Latam" in programa: cor = "#E30613"
+    elif "Smiles" in programa: cor = "#FF7000"
+    elif "Azul" in programa: cor = "#00AEEF"
     
     fig = px.area(df, x="data_hora", y="cpm", markers=True)
     fig.update_traces(line_color=cor, fillcolor=cor, marker=dict(size=6, color="white", line=dict(width=2, color=cor)))
-    
-    # Layout Limpo e Tamanho Fixo (Garante Alinhamento)
     fig.update_layout(
-        height=250, # ALTURA FIXA PARA ALINHAR
+        height=220, 
         margin=dict(l=0, r=0, t=10, b=0),
         xaxis_title=None, yaxis_title=None,
-        plot_bgcolor="rgba(0,0,0,0)",
-        yaxis=dict(showgrid=True, gridcolor='#eee'),
-        xaxis=dict(showgrid=False),
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        yaxis=dict(showgrid=True, gridcolor='#f0f0f0'), xaxis=dict(showgrid=False),
         showlegend=False
     )
     return fig
@@ -192,14 +204,39 @@ def admin_resetar_senha(id_user, nova_senha_texto):
 # --- INICIALIZA ---
 iniciar_banco_local()
 
-# --- CSS ---
+# --- CSS E ANIMAÇÕES ---
 st.markdown("""
 <style>
     .block-container {padding-top: 4rem !important; padding-bottom: 2rem !important;}
+    
+    /* Botões */
     div.stButton > button {width: 100%; background-color: #0E436B; color: white; border-radius: 5px; font-weight: bold;}
     div.stButton > button:hover {background-color: #082d4a; color: white;}
     div[data-testid="stImage"] {display: flex; justify-content: center; align-items: center; width: 100%;}
-    .metric-card {background: #f0f2f6; padding: 15px; border-radius: 8px;}
+    
+    /* Animações dos Cards */
+    @keyframes pulse-green {
+        0% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0.7); }
+        70% { box-shadow: 0 0 0 10px rgba(37, 211, 102, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0); }
+    }
+    @keyframes spin-slow {
+        0% { transform: rotate(0deg); } 25% { transform: rotate(15deg); }
+        75% { transform: rotate(-15deg); } 100% { transform: rotate(0deg); }
+    }
+
+    /* Estilo do Card */
+    .price-card {
+        background: #f8f9fa; padding: 15px; border-radius: 10px; border: 1px solid #dee2e6;
+        text-align: center; margin-bottom: 10px;
+    }
+    .winner-pulse {
+        border: 2px solid #25d366 !important; background: #f0fff4 !important;
+        animation: pulse-green 2s infinite; color: #0E436B;
+    }
+    .card-title { font-size: 0.85rem; color: #6c757d; margin-bottom: 5px; }
+    .card-value { font-size: 1.4rem; font-weight: 800; color: #212529; }
+    .winner-icon { display: inline-block; animation: spin-slow 3s infinite ease-in-out; margin-left: 5px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -233,6 +270,7 @@ def tela_login():
                     st.session_state['user'] = user
                     st.success("Login OK!"); time.sleep(0.5); st.rerun()
                 else: st.error("Acesso negado.")
+        
         with tab2:
             nome = st.text_input("Nome", key="cad_nome")
             email_c = st.text_input("E-mail", key="cad_mail")
@@ -270,7 +308,7 @@ def sistema_logado():
 
     df_cotacoes = ler_dados_historico()
 
-    # --- DASHBOARD (COM PLOTLY COLORIDO E ALINHADO) ---
+    # --- DASHBOARD (COM ANIMAÇÃO) ---
     if menu == "Dashboard (Mercado)":
         st.header("📊 Visão de Mercado")
         if not df_cotacoes.empty:
@@ -280,18 +318,22 @@ def sistema_logado():
                 val_hot = d.iloc[-1]['cpm'] if not d.empty else 0.0
                 val_p2p = pegar_ultimo_p2p(p)
                 
+                # QUEM GANHA?
+                hot_wins = val_hot > val_p2p and val_hot > 0
+                p2p_wins = val_p2p > val_hot and val_p2p > 0
+                
                 with cols[i]:
                     st.markdown(f"### {p}")
-                    mc1, mc2 = st.columns(2)
-                    with mc1: st.metric("🤖 Hotmilhas", formatar_real(val_hot) if val_hot > 0 else "--")
-                    with mc2: st.metric("👥 P2P", formatar_real(val_p2p) if val_p2p > 0 else "--")
-                    st.divider()
                     
+                    mc1, mc2 = st.columns(2)
+                    with mc1:
+                        st.markdown(criar_card_preco("🤖 Hotmilhas", val_hot, hot_wins), unsafe_allow_html=True)
+                    with mc2:
+                        st.markdown(criar_card_preco("👥 P2P", val_p2p, p2p_wins), unsafe_allow_html=True)
+                    
+                    st.divider()
                     if not d.empty:
-                        # USA PLOTLY COM COR ESPECÍFICA E ALTURA FIXA
                         st.plotly_chart(plotar_grafico(d, p), use_container_width=True)
-                    else:
-                        st.info("Sem dados")
         else: st.warning("Aguardando robô.")
 
     # --- CARTEIRA ---
@@ -331,21 +373,16 @@ def sistema_logado():
                     qtd = float(row['quantidade'])
                     custo = float(row['custo_total'])
                     cpm_pago = float(row['cpm_medio'])
-                    
                     val_venda = (qtd / 1000) * melhor_preco
                     lucro = val_venda - custo
                     patrimonio += val_venda
                     custo_total += custo
                     
                     view_data.append({
-                        "ID": row['id'], 
-                        "Programa": row['programa'], 
-                        "Qtd": f"{qtd:,.0f}".replace(',', '.'), 
-                        "Custo": formatar_real(custo),
-                        "CPM Pago": formatar_real(cpm_pago), 
+                        "ID": row['id'], "Programa": row['programa'], "Qtd": f"{qtd:,.0f}".replace(',', '.'), 
+                        "Custo": formatar_real(custo), "CPM Pago": formatar_real(cpm_pago), 
                         "Melhor Cotação": f"{formatar_real(melhor_preco)} ({origem})",
-                        "Lucro (Hoje)": formatar_real(lucro),
-                        "val_lucro_raw": lucro
+                        "Lucro (Hoje)": formatar_real(lucro), "val_lucro_raw": lucro
                     })
                 
                 k1, k2, k3 = st.columns(3)
@@ -364,17 +401,11 @@ def sistema_logado():
                         return f'background-color: {color}; color: black; font-weight: bold;'
                     except: return ''
 
-                st.dataframe(
-                    df_view.drop(columns=['val_lucro_raw']).style.applymap(color_lucro, subset=['Lucro (Hoje)']), 
-                    use_container_width=True
-                )
+                st.dataframe(df_view.drop(columns=['val_lucro_raw']).style.applymap(color_lucro, subset=['Lucro (Hoje)']), use_container_width=True)
                 
                 rid = st.number_input("ID para remover", step=1)
-                if st.button("🗑️ Remover Lote"):
-                    remover_carteira(rid)
-                    st.rerun()
-            else:
-                st.info("Sua carteira está vazia.")
+                if st.button("🗑️ Remover Lote"): remover_carteira(rid); st.rerun()
+            else: st.info("Sua carteira está vazia.")
 
     # --- P2P ---
     elif menu == "Mercado P2P":
