@@ -6,7 +6,6 @@ import time
 import re
 import plotly.express as px
 from datetime import datetime
-import asyncio
 
 # --- 1. CONFIGURAÇÃO INICIAL ---
 st.set_page_config(
@@ -39,15 +38,14 @@ def conectar_local(): return sqlite3.connect(NOME_BANCO_LOCAL)
 
 def iniciar_banco_local():
     con = conectar_local()
-    cur = con.cursor()
-    cur.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
-    cur.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
-    cur.execute('CREATE TABLE IF NOT EXISTS carteira (id INTEGER PRIMARY KEY AUTOINCREMENT, usuario_email TEXT, data_compra TEXT, programa TEXT, quantidade INTEGER, custo_total REAL, cpm_medio REAL)')
-    cur.execute('CREATE TABLE IF NOT EXISTS mercado_p2p (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, grupo_nome TEXT, programa TEXT, tipo TEXT, valor REAL, observacao TEXT)')
-    cur.execute('CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, nome TEXT, senha_hash TEXT, data_cadastro TEXT)')
+    con.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
+    con.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
+    con.execute('CREATE TABLE IF NOT EXISTS carteira (id INTEGER PRIMARY KEY AUTOINCREMENT, usuario_email TEXT, data_compra TEXT, programa TEXT, quantidade INTEGER, custo_total REAL, cpm_medio REAL)')
+    con.execute('CREATE TABLE IF NOT EXISTS mercado_p2p (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, grupo_nome TEXT, programa TEXT, tipo TEXT, valor REAL, observacao TEXT)')
+    con.execute('CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, nome TEXT, senha_hash TEXT, data_cadastro TEXT)')
     con.commit(); con.close()
 
-# --- 4. UTILITÁRIOS ---
+# --- 4. UTILITÁRIOS E VISUAIS (DEFINIDOS NO TOPO) ---
 def criar_hash(senha): return hashlib.sha256(senha.encode()).hexdigest()
 
 def validar_senha_forte(senha):
@@ -193,71 +191,39 @@ def admin_resetar_senha(id_user, nova_senha_texto):
 # --- INICIALIZAÇÃO ---
 iniciar_banco_local()
 
-# --- CSS PREMIUM (DESIGN DE VENDAS) ---
+# --- CSS PREMIUM (LANDING PAGE + SISTEMA) ---
 st.markdown("""
 <style>
-    /* Fonte e Fundo */
-    .stApp { background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); font-family: 'Segoe UI', sans-serif; }
-    .block-container {padding-top: 2rem !important;}
-
-    /* Botões Principais */
-    div.stButton > button {
-        width: 100%; 
-        background-color: #0E436B; 
-        color: white; 
-        border-radius: 8px; 
-        font-weight: 700; 
-        border: none; 
-        padding: 0.7rem 1rem; 
-        transition: all 0.3s;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    }
-    div.stButton > button:hover { 
-        background-color: #1E5F8C; 
-        transform: translateY(-2px);
-        box-shadow: 0 6px 12px rgba(0,0,0,0.15);
-    }
-
-    /* Feature Cards */
-    .feature-card {
-        background: white;
-        padding: 30px;
-        border-radius: 15px;
-        text-align: center;
-        height: 100%;
-        box-shadow: 0 10px 20px rgba(0,0,0,0.05);
-        border-top: 5px solid #0E436B;
-        transition: transform 0.3s;
-    }
-    .feature-card:hover { transform: translateY(-5px); }
-    .feature-icon { font-size: 3rem; margin-bottom: 15px; }
-    .feature-title { font-size: 1.2rem; font-weight: bold; color: #333; margin-bottom: 10px; }
-    .feature-text { font-size: 0.9rem; color: #666; }
-
-    /* Pricing Card */
-    .pricing-card {
-        background: white;
-        padding: 40px;
-        border-radius: 15px;
-        text-align: center;
-        border: 1px solid #eee;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.1);
-        position: relative;
-        overflow: hidden;
-    }
-    .pricing-header { font-size: 1.5rem; font-weight: bold; color: #0E436B; margin-bottom: 10px; }
-    .pricing-price { font-size: 3rem; font-weight: 800; color: #222; }
-    .pricing-period { font-size: 1rem; color: #888; }
-    .pricing-features { text-align: left; margin: 30px 0; font-size: 1rem; color: #555; }
-    .pricing-features li { margin-bottom: 10px; list-style: none; }
+    /* Fundo e Fonte */
+    .stApp { background: linear-gradient(180deg, #F8FAFC 0%, #FFFFFF 100%); font-family: 'Segoe UI', sans-serif; }
     
-    /* Badge Popular */
-    .popular-badge {
-        background: #FFC107; color: #333; padding: 5px 20px; font-weight: bold; font-size: 0.8rem;
-        position: absolute; top: 20px; right: -30px; transform: rotate(45deg); width: 120px;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    /* Cards da Landing Page */
+    .lp-card {
+        background: white; padding: 25px; border-radius: 12px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.05); text-align: center;
+        height: 100%; border: 1px solid #EEF2F6; transition: transform 0.3s ease;
     }
+    .lp-card:hover { transform: translateY(-5px); box-shadow: 0 8px 25px rgba(14, 67, 107, 0.15); border-color: #0E436B; }
+    .lp-icon { font-size: 2.5rem; margin-bottom: 15px; display: block; }
+    .lp-title { font-weight: 700; color: #0E436B; margin-bottom: 10px; font-size: 1.1rem; }
+    .lp-text { color: #64748B; font-size: 0.9rem; line-height: 1.5; }
 
+    /* Botões */
+    div.stButton > button {
+        width: 100%; background-color: #0E436B; color: white; border-radius: 8px; 
+        font-weight: 600; border: none; padding: 0.6rem 1rem; transition: background 0.2s;
+    }
+    div.stButton > button:hover { background-color: #0A304E; color: white; box-shadow: 0 2px 8px rgba(14, 67, 107, 0.3); }
+    
+    /* Animações do Sistema */
+    @keyframes pulse-green { 0% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(37, 211, 102, 0); } 100% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0); } }
+    
+    .price-card { background: white; padding: 15px; border-radius: 10px; border: 1px solid #E2E8F0; text-align: center; margin-bottom: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+    .winner-pulse { border: 2px solid #25d366 !important; background: #F0FDF4 !important; animation: pulse-green 2s infinite; color: #0E436B; }
+    .card-title { font-size: 0.85rem; color: #64748B; margin-bottom: 5px; font-weight: 600; }
+    .card-value { font-size: 1.5rem; font-weight: 800; color: #1E293B; }
+    .winner-icon { display: inline-block; margin-left: 5px; }
+    
     /* Centralizar Imagens */
     div[data-testid="stImage"] { display: flex; justify-content: center; align-items: center; width: 100%; }
 </style>
@@ -271,39 +237,34 @@ def mostrar_paywall():
 if 'user' not in st.session_state: st.session_state['user'] = None
 
 # ==============================================================================
-# TELA 1: LANDING PAGE (A NOVA VITRINE)
+# TELA 1: LANDING PAGE (VENDAS + LOGIN)
 # ==============================================================================
 def tela_landing_page():
-    
-    # --- HERO SECTION ---
-    c1, c2 = st.columns([1.5, 1])
+    c1, c2 = st.columns([1.3, 1])
     
     with c1:
         st.image(LOGO_URL, width=250)
         st.markdown("""
-        <div style="padding-top: 20px;">
-            <h1 style="color: #0E436B; font-size: 3rem; line-height: 1.2;">O Controle Total das suas Milhas Aéreas.</h1>
-            <p style="font-size: 1.2rem; color: #555; margin-top: 15px;">
-                Pare de depender de planilhas. O <b>MilhasPro</b> monitora o mercado, compara preços P2P e calcula seu lucro exato em tempo real.
-            </p>
-            <div style="margin-top: 30px; display: flex; gap: 15px;">
-                <div style="background: #E0F2FE; color: #0E436B; padding: 8px 15px; border-radius: 20px; font-weight: bold;">✅ Cotação Automática</div>
-                <div style="background: #DCFCE7; color: #166534; padding: 8px 15px; border-radius: 20px; font-weight: bold;">✅ Radar P2P</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        # O Sistema Definitivo para Milheiros Profissionais 🚀
+        
+        Domine o mercado de milhas com inteligência de dados. O **MilhasPro** automatiza cotações, monitora o mercado P2P e gerencia seu patrimônio em tempo real.
+        
+        ✅ **Robô Automático:** Cotação Hotmilhas diária.  
+        ✅ **Radar P2P:** Preços reais dos grupos de Telegram.  
+        ✅ **Gestão de Carteira:** Controle seu lucro exato.
+        """)
+        st.write("")
     
     with c2:
-        # LOGIN CARD FLUTUANTE
-        st.markdown("<div style='background: white; padding: 30px; border-radius: 15px; box-shadow: 0 10px 40px rgba(0,0,0,0.15);'>", unsafe_allow_html=True)
-        st.markdown("<h3 style='text-align: center; color: #0E436B; margin-bottom: 20px;'>Acessar Plataforma</h3>", unsafe_allow_html=True)
+        st.markdown("<div style='background: white; padding: 25px; border-radius: 12px; box-shadow: 0 10px 30px rgba(14, 67, 107, 0.1); border: 1px solid #E2E8F0;'>", unsafe_allow_html=True)
+        st.markdown("<h3 style='text-align: center; color: #0E436B; margin-top: 0;'>Acessar Painel</h3>", unsafe_allow_html=True)
         
-        tab_l, tab_c = st.tabs(["JÁ TENHO CONTA", "CRIAR GRÁTIS"])
+        tab_l, tab_c = st.tabs(["ENTRAR", "CRIAR CONTA"])
         
         with tab_l:
             email = st.text_input("E-mail", key="log_email")
             senha = st.text_input("Senha", type="password", key="log_pass")
-            if st.button("ENTRAR NO SISTEMA", key="btn_log"):
+            if st.button("ENTRAR AGORA", type="primary", key="btn_log"):
                 try:
                     if email == st.secrets["admin"]["email"] and senha == st.secrets["admin"]["senha"]:
                         st.session_state['user'] = {"nome": st.secrets["admin"]["nome"], "plano": "Admin", "email": email}
@@ -312,81 +273,78 @@ def tela_landing_page():
                 user = autenticar_usuario(email, senha)
                 if user:
                     st.session_state['user'] = user
-                    st.toast(f"Bem-vindo, {user['nome']}!"); time.sleep(0.5); st.rerun()
+                    st.toast(f"Bem-vindo, {user['nome']}!")
+                    time.sleep(0.5)
+                    st.rerun()
                 else: st.error("Dados inválidos.")
         
         with tab_c:
-            nome = st.text_input("Seu Nome", key="cad_nome")
-            c_email = st.text_input("Seu E-mail", key="cad_mail")
+            nome = st.text_input("Nome", key="cad_nome")
+            c_email = st.text_input("E-mail", key="cad_mail")
             whats = st.text_input("WhatsApp", key="cad_whats")
-            pw = st.text_input("Senha Segura", type="password", key="cad_pw")
-            if st.button("COMEÇAR AGORA", key="btn_cad"):
+            pw = st.text_input("Senha", type="password", key="cad_pw")
+            if st.button("CADASTRAR GRÁTIS", key="btn_cad"):
                 ok, msg = registrar_usuario(nome, c_email, pw, whats)
                 if ok: st.success("Sucesso! Faça login."); st.balloons()
                 else: st.error(msg)
         
         st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown("<br><br><hr><br>", unsafe_allow_html=True)
+    st.markdown("---")
 
-    # --- FEATURE SECTION ---
-    st.markdown("<h2 style='text-align: center; color: #333; margin-bottom: 40px;'>Por que os profissionais usam o MilhasPro?</h2>", unsafe_allow_html=True)
-    
+    # FEATURE CARDS
+    st.markdown("<h2 style='text-align: center; color: #1E293B; margin-bottom: 30px;'>Por que escolher o MilhasPro?</h2>", unsafe_allow_html=True)
     col_f1, col_f2, col_f3 = st.columns(3)
     
     with col_f1:
         st.markdown("""
-        <div class="feature-card">
-            <div class="feature-icon">🤖</div>
-            <div class="feature-title">Robô 24/7</div>
-            <div class="feature-text">Nosso sistema monitora a Hotmilhas automaticamente todo dia. Você nunca mais vai vender na baixa.</div>
+        <div class="lp-card">
+            <span class="lp-icon">🤖</span>
+            <div class="lp-title">Automação Inteligente</div>
+            <div class="lp-text">Nosso robô monitora a Hotmilhas todo dia e salva o histórico para você nunca perder o pico de venda.</div>
         </div>
         """, unsafe_allow_html=True)
     
     with col_f2:
         st.markdown("""
-        <div class="feature-card">
-            <div class="feature-icon">🕵️</div>
-            <div class="feature-title">Inteligência P2P</div>
-            <div class="feature-text">Tenha acesso aos preços reais praticados nos grupos fechados de Telegram e venda com ágio.</div>
+        <div class="lp-card">
+            <span class="lp-icon">👥</span>
+            <div class="lp-title">Radar P2P Exclusivo</div>
+            <div class="lp-text">Saiba quanto estão pagando nos grupos fechados. Compare preço oficial x paralelo e venda mais caro.</div>
         </div>
         """, unsafe_allow_html=True)
 
     with col_f3:
         st.markdown("""
-        <div class="feature-card">
-            <div class="feature-icon">📈</div>
-            <div class="feature-title">Gestão de Lucro</div>
-            <div class="feature-text">Controle total do seu estoque. O sistema calcula seu patrimônio baseado na melhor cotação do momento.</div>
+        <div class="lp-card">
+            <span class="lp-icon">💼</span>
+            <div class="lp-title">Controle de Patrimônio</div>
+            <div class="lp-text">Registre suas compras. O sistema calcula seu lucro baseado na MELHOR cotação do dia automaticamente.</div>
         </div>
         """, unsafe_allow_html=True)
-
-    st.markdown("<br><br>", unsafe_allow_html=True)
-
-    # --- PRICING SECTION ---
-    c_p1, c_p2, c_p3 = st.columns([1, 2, 1])
     
-    with c_p2:
+    # PRICING SECTION
+    st.markdown("---")
+    st.markdown("<h2 style='text-align: center; color: #1E293B;'>Planos e Preços</h2>", unsafe_allow_html=True)
+    p1, p2, p3 = st.columns([1, 1.5, 1])
+    with p2:
         st.markdown("""
-        <div class="pricing-card">
-            <div class="popular-badge">POPULAR</div>
-            <div class="pricing-header">ASSINATURA PRO</div>
-            <div class="pricing-price">R$ 49,90<span class="pricing-period">/mês</span></div>
-            <hr style="margin: 20px 0;">
-            <ul class="pricing-features">
-                <li>✅ <b>Acesso Ilimitado</b> ao Dashboard</li>
-                <li>✅ <b>Cotações P2P</b> Exclusivas</li>
-                <li>✅ <b>Gestão de Carteira</b> Inteligente</li>
-                <li>✅ <b>Suporte</b> Prioritário</li>
+        <div style="background: #0E436B; color: white; padding: 30px; border-radius: 15px; text-align: center; margin-top: 20px;">
+            <h3>ASSINATURA PRO</h3>
+            <h1 style="font-size: 3.5rem; margin: 0;">R$ 49,90</h1>
+            <p>/mês</p>
+            <hr style="border-color: rgba(255,255,255,0.2);">
+            <ul style="text-align: left; list-style: none; padding: 0; line-height: 2;">
+                <li>✅ Acesso Total ao Painel</li>
+                <li>✅ Radar P2P Ilimitado</li>
+                <li>✅ Carteira Inteligente</li>
             </ul>
             <br>
         </div>
         """, unsafe_allow_html=True)
-        # Botão fake que leva pro login
-        st.info("👆 Crie sua conta grátis acima para assinar.")
 
 # ==============================================================================
-# TELA 2: SISTEMA LOGADO (MANTIDO INTACTO)
+# TELA 2: SISTEMA LOGADO
 # ==============================================================================
 def sistema_logado():
     user = st.session_state['user']
@@ -467,14 +425,10 @@ def sistema_logado():
                 delta_perc = ((patrimonio/custo_total)-1)*100 if custo_total > 0 else 0
                 k3.metric("Lucro Projetado", formatar_real(patrimonio - custo_total), delta=f"{delta_perc:.1f}%")
                 st.divider()
-                
-                # Tabela Corrigida
-                df_view = pd.DataFrame(view_data)
                 def color_lucro(val):
                     if isinstance(val, str) and "-" in val: return 'color: red; font-weight: bold;'
                     return 'color: green; font-weight: bold;'
-
-                st.dataframe(df_view.drop(columns=['val_lucro_raw']).style.applymap(color_lucro, subset=['Lucro (Hoje)']), use_container_width=True)
+                st.dataframe(pd.DataFrame(view_data).style.applymap(color_lucro, subset=['Lucro (Hoje)']).drop(columns=['val_lucro_raw']), use_container_width=True)
                 rid = st.number_input("ID para remover", step=1)
                 if st.button("🗑️ Remover Lote"): remover_carteira(rid); st.rerun()
             else: st.info("Carteira vazia.")
