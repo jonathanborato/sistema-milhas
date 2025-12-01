@@ -4,8 +4,9 @@ import sqlite3
 import hashlib
 import time
 import re
-import plotly.express as px
+import asyncio
 from datetime import datetime
+import plotly.express as px
 
 # --- 1. CONFIGURAÇÃO INICIAL ---
 st.set_page_config(
@@ -23,6 +24,13 @@ try:
     SUPABASE_AVAILABLE = True
 except ImportError:
     SUPABASE_AVAILABLE = False
+
+# --- CONFIGURAÇÃO PLAYWRIGHT (ROBÔ) ---
+try:
+    from playwright.async_api import async_playwright
+    PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+    PLAYWRIGHT_AVAILABLE = False
 
 def get_supabase():
     if not SUPABASE_AVAILABLE: return None
@@ -47,9 +55,6 @@ def criar_hash(senha): return hashlib.sha256(senha.encode()).hexdigest()
 
 def validar_senha_forte(senha):
     if len(senha) < 8: return False, "Mínimo 8 caracteres."
-    if not re.search(r"[a-z]", senha): return False, "Precisa de letra minúscula."
-    if not re.search(r"[A-Z]", senha): return False, "Precisa de letra maiúscula."
-    if not re.search(r"[0-9]", senha): return False, "Precisa de número."
     return True, ""
 
 def formatar_real(valor):
@@ -58,24 +63,6 @@ def formatar_real(valor):
     s = s.replace(',', 'X').replace('.', ',').replace('X', '.')
     return f"R$ {s}"
 
-# --- FUNÇÃO VISUAL: CARD ANIMADO ---
-def criar_card_preco(titulo, valor, is_winner=False):
-    valor_fmt = formatar_real(valor) if valor > 0 else "--"
-    
-    # CSS Classes para animação
-    css_class = "price-card winner-pulse" if is_winner and valor > 0 else "price-card"
-    icon_html = '<span class="winner-icon">🏆</span>' if is_winner and valor > 0 else ""
-    
-    # HTML do Card
-    html = f"""
-    <div class="{css_class}">
-        <div class="card-title">{titulo} {icon_html}</div>
-        <div class="card-value">{valor_fmt}</div>
-    </div>
-    """
-    return html
-
-# --- FUNÇÃO GRÁFICA: PLOTLY ---
 def plotar_grafico(df, programa):
     cor = "#0E436B"
     if "Latam" in programa: cor = "#E30613"
@@ -85,7 +72,7 @@ def plotar_grafico(df, programa):
     fig = px.area(df, x="data_hora", y="cpm", markers=True)
     fig.update_traces(line_color=cor, fillcolor=cor, marker=dict(size=6, color="white", line=dict(width=2, color=cor)))
     fig.update_layout(
-        height=220, 
+        height=250, 
         margin=dict(l=0, r=0, t=10, b=0),
         xaxis_title=None, yaxis_title=None,
         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
@@ -94,7 +81,97 @@ def plotar_grafico(df, programa):
     )
     return fig
 
-# --- 4. FUNÇÕES DE DADOS ---
+def criar_card_preco(titulo, valor, is_winner=False):
+    valor_fmt = formatar_real(valor) if valor > 0 else "--"
+    css_class = "price-card winner-pulse" if is_winner and valor > 0 else "price-card"
+    icon_html = '<span class="winner-icon">🏆</span>' if is_winner and valor > 0 else ""
+    
+    return f"""
+    <div class="{css_class}">
+        <div class="card-title">{titulo} {icon_html}</div>
+        <div class="card-value">{valor_fmt}</div>
+    </div>
+    """
+
+# --- 4. ROBÔ DE COTAÇÃO (NOVO!) ---
+async def executar_cotacao_agora():
+    if not PLAYWRIGHT_AVAILABLE:
+        st.error("Biblioteca Playwright não instalada.")
+        return False
+
+    SEU_EMAIL = "jonathanfborato@gmail.com" # Email genérico para cotação
+    PROGRAMAS = {"1": "Smiles", "2": "Latam", "3": "Azul"}
+    QTD_MILHAS = "100000"
+    
+    status_text = st.empty()
+    bar = st.progress(0)
+    
+    try:
+        async with async_playwright() as p:
+            # Tenta lançar o browser (requer packages.txt configurado no Streamlit Cloud)
+            browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
+            context = await browser.new_context()
+            page = await context.new_page()
+            
+            steps = len(PROGRAMAS)
+            current_step = 0
+            
+            for id_prog, nome_prog in PROGRAMAS.items():
+                status_text.text(f"🤖 Robô consultando: {nome_prog}...")
+                try:
+                    await page.goto("https://hotmilhas.com.br/", timeout=60000)
+                    
+                    # Preenchimento
+                    await page.get_by_role("textbox", name="Digite seu e-mail *").fill(SEU_EMAIL)
+                    await page.get_by_role("combobox").select_option(id_prog)
+                    
+                    campo_qtd = page.get_by_role("textbox", name="Quantidade de milhas *")
+                    await campo_qtd.click()
+                    await campo_qtd.fill(QTD_MILHAS)
+                    try: await page.get_by_text("100.000", exact=True).click()
+                    except: await page.keyboard.press("Enter")
+
+                    await page.locator("#form").get_by_role("button", name="Cotar minhas milhas").click(force=True)
+                    
+                    # Espera inteligente
+                    try:
+                        await page.wait_for_selector("text=R$", timeout=15000)
+                    except:
+                        pass # Se não achar rápido, tenta ler mesmo assim
+
+                    # Leitura
+                    texto = await page.locator("body").inner_text()
+                    # Regex busca preço de 90 dias
+                    padrao = r"(?:em|Até)\s+(90)\s+dia[s]?.*?R\$\s?([\d\.,]+)"
+                    match = re.search(padrao, texto, re.DOTALL | re.IGNORECASE)
+                    
+                    if match:
+                        valor_float = float(match.group(2).replace('.', '').replace(',', '.'))
+                        cpm = valor_float / 100
+                        
+                        # Salva no Banco Local
+                        con = conectar_local()
+                        agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        con.execute('INSERT INTO historico (data_hora, email, prazo_dias, valor_total, cpm) VALUES (?, ?, ?, ?, ?)', (agora, nome_prog, 90, valor_float, cpm))
+                        con.commit(); con.close()
+                        
+                except Exception as e:
+                    print(f"Erro {nome_prog}: {e}")
+                
+                await context.clear_cookies()
+                current_step += 1
+                bar.progress(int((current_step / steps) * 100))
+            
+            await browser.close()
+            status_text.empty()
+            bar.empty()
+            return True
+            
+    except Exception as e:
+        st.error(f"Erro ao iniciar robô: {e}")
+        return False
+
+# --- 5. FUNÇÕES DE DADOS ---
 
 def adicionar_p2p(g, p, t, v, o):
     sb = get_supabase()
@@ -208,32 +285,15 @@ iniciar_banco_local()
 st.markdown("""
 <style>
     .block-container {padding-top: 4rem !important; padding-bottom: 2rem !important;}
-    
-    /* Botões */
     div.stButton > button {width: 100%; background-color: #0E436B; color: white; border-radius: 5px; font-weight: bold;}
     div.stButton > button:hover {background-color: #082d4a; color: white;}
     div[data-testid="stImage"] {display: flex; justify-content: center; align-items: center; width: 100%;}
     
-    /* Animações dos Cards */
-    @keyframes pulse-green {
-        0% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0.7); }
-        70% { box-shadow: 0 0 0 10px rgba(37, 211, 102, 0); }
-        100% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0); }
-    }
-    @keyframes spin-slow {
-        0% { transform: rotate(0deg); } 25% { transform: rotate(15deg); }
-        75% { transform: rotate(-15deg); } 100% { transform: rotate(0deg); }
-    }
-
-    /* Estilo do Card */
-    .price-card {
-        background: #f8f9fa; padding: 15px; border-radius: 10px; border: 1px solid #dee2e6;
-        text-align: center; margin-bottom: 10px;
-    }
-    .winner-pulse {
-        border: 2px solid #25d366 !important; background: #f0fff4 !important;
-        animation: pulse-green 2s infinite; color: #0E436B;
-    }
+    @keyframes pulse-green { 0% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(37, 211, 102, 0); } 100% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0); } }
+    @keyframes spin-slow { 0% { transform: rotate(0deg); } 25% { transform: rotate(15deg); } 75% { transform: rotate(-15deg); } 100% { transform: rotate(0deg); } }
+    
+    .price-card { background: #f8f9fa; padding: 15px; border-radius: 10px; border: 1px solid #dee2e6; text-align: center; margin-bottom: 10px; }
+    .winner-pulse { border: 2px solid #25d366 !important; background: #f0fff4 !important; animation: pulse-green 2s infinite; color: #0E436B; }
     .card-title { font-size: 0.85rem; color: #6c757d; margin-bottom: 5px; }
     .card-value { font-size: 1.4rem; font-weight: 800; color: #212529; }
     .winner-icon { display: inline-block; animation: spin-slow 3s infinite ease-in-out; margin-left: 5px; }
@@ -296,21 +356,37 @@ def sistema_logado():
         st.markdown(f"""<div style="display: flex; justify-content: center; margin-bottom: 15px;"><img src="{LOGO_URL}" style="width: 200px; max-width: 100%;"></div>""", unsafe_allow_html=True)
         st.markdown(f"<div style='text-align: center; margin-top: -10px;'>Olá, <b>{user['nome'].split()[0]}</b></div>", unsafe_allow_html=True)
         st.caption(f"Nuvem: {sb_status}")
-        
         if plano == "Admin": st.success("👑 ADMIN")
         elif plano == "Pro": st.success("⭐ PRO")
         else: st.info("🔹 FREE")
-        
         st.divider()
         menu = st.radio("Menu", opcoes)
         st.divider()
         if st.button("SAIR"): st.session_state['user'] = None; st.rerun()
 
-    df_cotacoes = ler_dados_historico()
-
-    # --- DASHBOARD (COM ANIMAÇÃO) ---
+    # --- DASHBOARD ---
     if menu == "Dashboard (Mercado)":
-        st.header("📊 Visão de Mercado")
+        # Layout: Título na Esquerda | Botão na Direita
+        col_title, col_btn = st.columns([3, 1])
+        with col_title:
+            st.header("📊 Visão de Mercado")
+        with col_btn:
+            # BOTÃO DE ATUALIZAR AGORA
+            if st.button("🔄 Atualizar Cotações"):
+                with st.spinner("Robô consultando Hotmilhas em tempo real... (Aguarde 40s)"):
+                    # Roda o scraping
+                    sucesso = asyncio.run(executar_cotacao_agora())
+                    if sucesso:
+                        st.success("Dados atualizados!")
+                        st.cache_data.clear() # Limpa o cache para mostrar o novo preço
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error("Erro ao rodar robô. Verifique se o servidor tem permissão.")
+
+        # Carrega dados após possível atualização
+        df_cotacoes = ler_dados_historico()
+
         if not df_cotacoes.empty:
             cols = st.columns(3)
             for i, p in enumerate(["Latam", "Smiles", "Azul"]):
@@ -318,26 +394,22 @@ def sistema_logado():
                 val_hot = d.iloc[-1]['cpm'] if not d.empty else 0.0
                 val_p2p = pegar_ultimo_p2p(p)
                 
-                # QUEM GANHA?
+                # Lógica de quem ganha
                 hot_wins = val_hot > val_p2p and val_hot > 0
                 p2p_wins = val_p2p > val_hot and val_p2p > 0
                 
                 with cols[i]:
                     st.markdown(f"### {p}")
-                    
                     mc1, mc2 = st.columns(2)
-                    with mc1:
-                        st.markdown(criar_card_preco("🤖 Hotmilhas", val_hot, hot_wins), unsafe_allow_html=True)
-                    with mc2:
-                        st.markdown(criar_card_preco("👥 P2P", val_p2p, p2p_wins), unsafe_allow_html=True)
-                    
+                    with mc1: st.markdown(criar_card_preco("🤖 Hotmilhas", val_hot, hot_wins), unsafe_allow_html=True)
+                    with mc2: st.markdown(criar_card_preco("👥 P2P", val_p2p, p2p_wins), unsafe_allow_html=True)
                     st.divider()
-                    if not d.empty:
-                        st.plotly_chart(plotar_grafico(d, p), use_container_width=True)
-        else: st.warning("Aguardando robô.")
+                    if not d.empty: st.plotly_chart(plotar_grafico(d, p), use_container_width=True)
+        else: st.warning("Aguardando primeira execução do robô.")
 
     # --- CARTEIRA ---
     elif menu == "Minha Carteira":
+        df_cotacoes = ler_dados_historico() # Precisa carregar para calcular valuation
         st.header("💼 Carteira")
         if plano == "Free": mostrar_paywall()
         else:
@@ -357,14 +429,12 @@ def sistema_logado():
                 patrimonio = 0
                 custo_total = 0
                 view_data = []
-                
                 for _, row in dfc.iterrows():
                     prog_nome = row['programa'].split()[0]
                     val_hot = 0.0
                     if not df_cotacoes.empty:
                         f = df_cotacoes[df_cotacoes['programa'].str.contains(prog_nome, case=False, na=False)]
                         if not f.empty: val_hot = f.iloc[-1]['cpm']
-                    
                     val_p2p = pegar_ultimo_p2p(prog_nome)
                     melhor_preco = max(val_hot, val_p2p)
                     origem = "Hotmilhas" if val_hot >= val_p2p else "P2P"
@@ -378,12 +448,7 @@ def sistema_logado():
                     patrimonio += val_venda
                     custo_total += custo
                     
-                    view_data.append({
-                        "ID": row['id'], "Programa": row['programa'], "Qtd": f"{qtd:,.0f}".replace(',', '.'), 
-                        "Custo": formatar_real(custo), "CPM Pago": formatar_real(cpm_pago), 
-                        "Melhor Cotação": f"{formatar_real(melhor_preco)} ({origem})",
-                        "Lucro (Hoje)": formatar_real(lucro), "val_lucro_raw": lucro
-                    })
+                    view_data.append({"ID": row['id'], "Programa": row['programa'], "Qtd": f"{qtd:,.0f}".replace(',', '.'), "Custo": formatar_real(custo), "CPM Pago": formatar_real(cpm_pago), "Melhor Cotação": f"{formatar_real(melhor_preco)} ({origem})", "Lucro (Hoje)": formatar_real(lucro), "val_lucro_raw": lucro})
                 
                 k1, k2, k3 = st.columns(3)
                 k1.metric("Total Investido", formatar_real(custo_total))
@@ -392,16 +457,7 @@ def sistema_logado():
                 k3.metric("Lucro Projetado", formatar_real(patrimonio - custo_total), delta=f"{delta_perc:.1f}%")
                 
                 st.divider()
-                
-                df_view = pd.DataFrame(view_data)
-                def color_lucro(val):
-                    try:
-                        num = float(val.replace('R$', '').replace('.', '').replace(',', '.').strip())
-                        color = '#d4edda' if num > 0 else '#f8d7da'
-                        return f'background-color: {color}; color: black; font-weight: bold;'
-                    except: return ''
-
-                st.dataframe(df_view.drop(columns=['val_lucro_raw']).style.applymap(color_lucro, subset=['Lucro (Hoje)']), use_container_width=True)
+                st.dataframe(pd.DataFrame(view_data).style.applymap(lambda x: 'color: green' if x > 0 else 'color: red', subset=['val_lucro_raw']), use_container_width=True)
                 
                 rid = st.number_input("ID para remover", step=1)
                 if st.button("🗑️ Remover Lote"): remover_carteira(rid); st.rerun()
@@ -425,7 +481,6 @@ def sistema_logado():
         else:
             if plano == "Free": mostrar_paywall(); st.stop()
             else: st.info("ℹ️ Dados verificados.")
-
         dfp = ler_p2p_todos()
         if not dfp.empty:
             dfp['valor'] = dfp['valor'].apply(formatar_real)
