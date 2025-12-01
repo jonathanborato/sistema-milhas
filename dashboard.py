@@ -5,9 +5,10 @@ import hashlib
 import time
 import re
 import asyncio
+import plotly.express as px
 from datetime import datetime
 
-# --- 1. CONFIGURAÇÃO INICIAL (Obrigatório ser a primeira linha) ---
+# --- 1. CONFIGURAÇÃO INICIAL ---
 st.set_page_config(
     page_title="MilhasPro System",
     page_icon="🚀",
@@ -17,16 +18,15 @@ st.set_page_config(
 
 LOGO_URL = "https://raw.githubusercontent.com/jonathanborato/sistema-milhas/main/logo.png"
 
-# --- 2. CONFIGURAÇÃO DE AMBIENTE (FIX DE ESCOPO) ---
-SUPABASE_AVAILABLE = False
-PLAYWRIGHT_AVAILABLE = False
-from playwright.async_api import async_playwright # Tenta importar
-
+# --- 2. CONFIGURAÇÃO SUPABASE / AMBIENTE ---
 try:
     from supabase import create_client
-    SUPABASE_AVAILABLE = True # SÓ VIRA TRUE SE IMPORTAR COM SUCESSO
+    from playwright.async_api import async_playwright
+    SUPABASE_AVAILABLE = True
+    PLAYWRIGHT_AVAILABLE = True
 except ImportError:
-    pass
+    SUPABASE_AVAILABLE = False
+    PLAYWRIGHT_AVAILABLE = False
 
 def get_supabase():
     if not SUPABASE_AVAILABLE: return None
@@ -36,7 +36,7 @@ def get_supabase():
         return create_client(url, key)
     except: return None
 
-# --- 3. BANCO LOCAL ---
+# --- 3. BANCO LOCAL (CACHE) ---
 NOME_BANCO_LOCAL = "milhas.db"
 def conectar_local(): return sqlite3.connect(NOME_BANCO_LOCAL)
 
@@ -50,6 +50,7 @@ def iniciar_banco_local():
     cur.execute('CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, nome TEXT, senha_hash TEXT, data_cadastro TEXT)')
     con.commit(); con.close()
 
+# --- 4. FUNÇÕES DE UTILIDADE E VISUALIZAÇÃO ---
 def criar_hash(senha): return hashlib.sha256(senha.encode()).hexdigest()
 
 def validar_senha_forte(senha):
@@ -60,11 +61,40 @@ def validar_senha_forte(senha):
     if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", senha): return False, "Precisa de caractere especial (@#$)."
     return True, ""
 
-# --- 4. FUNÇÕES DE USUÁRIO & ADMIN ---
+def formatar_real(valor):
+    if valor is None: return "R$ 0,00"
+    s = f"{float(valor):,.2f}"
+    s = s.replace(',', 'X').replace('.', ',').replace('X', '.')
+    return f"R$ {s}"
+
+# --- GRÁFICOS E CARDS (Definidos antes de serem chamados) ---
+def plotar_grafico(df, programa):
+    cor = "#0E436B"
+    if "Latam" in programa: cor = "#E30613"
+    elif "Smiles" in programa: cor = "#FF7000"
+    elif "Azul" in programa: cor = "#00AEEF"
+    
+    fig = px.area(df, x="data_hora", y="cpm", markers=True)
+    fig.update_traces(line_color=cor, fillcolor=cor, marker=dict(size=6, color="white", line=dict(width=2, color=cor)))
+    fig.update_layout(height=250, margin=dict(l=0, r=0, t=10, b=0), xaxis_title=None, yaxis_title=None, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", yaxis=dict(showgrid=True, gridcolor='#f0f0f0'), xaxis=dict(showgrid=False), showlegend=False)
+    return fig
+
+def criar_card_preco(titulo, valor, is_winner=False):
+    valor_fmt = formatar_real(valor) if valor > 0 else "--"
+    css_class = "price-card winner-pulse" if is_winner and valor > 0 else "price-card"
+    icon_html = '<span class="winner-icon">🏆</span>' if is_winner and valor > 0 else ""
+    
+    return f"""
+    <div class="{css_class}">
+        <div class="card-title">{titulo} {icon_html}</div>
+        <div class="card-value">{valor_fmt}</div>
+    </div>
+    """
+
+# --- 5. FUNÇÕES DE DADOS (CRUD) ---
 def registrar_usuario(nome, email, senha, telefone):
     valida, msg = validar_senha_forte(senha)
     if not valida: return False, msg
-
     sb = get_supabase()
     if sb:
         try:
@@ -120,7 +150,6 @@ def admin_resetar_senha(id_user, nova_senha_texto):
         return True
     return False
 
-# --- 5. FUNÇÕES DE DADOS (Restante) ---
 def ler_dados_historico():
     con = conectar_local()
     try:
@@ -181,17 +210,23 @@ def ler_p2p_todos():
         return pd.DataFrame(res.data)
     except: return pd.DataFrame()
 
-# --- ROBÔ DE COTAÇÃO (COMPACTADO) ---
+# --- 6. ROBÔ DE COTAÇÃO (INTERNO) ---
 async def executar_cotacao_agora():
-    if not PLAYWRIGHT_AVAILABLE: st.error("Playwright não instalado."); return False
+    if not PLAYWRIGHT_AVAILABLE:
+        st.error("Playwright não instalado.")
+        return False
+
+    SEU_EMAIL = "jonathanfborato@gmail.com"
+    PROGRAMAS = {"1": "Smiles", "2": "Latam", "3": "Azul"}
+    QTD_MILHAS = "100000"
     
-    SEU_EMAIL = "jonathanfborato@gmail.com"; PROGRAMAS = {"1": "Smiles", "2": "Latam", "3": "Azul"}; QTD_MILHAS = "100000"
     status_text = st.empty(); bar = st.progress(0)
     
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']); context = await browser.new_context(); page = await context.new_page()
             steps = len(PROGRAMAS); current_step = 0
+            
             for id_prog, nome_prog in PROGRAMAS.items():
                 status_text.text(f"🤖 Robô consultando: {nome_prog}..."); await page.goto("https://hotmilhas.com.br/", timeout=60000)
                 await page.get_by_role("textbox", name="Digite seu e-mail *").fill(SEU_EMAIL); await page.get_by_role("combobox").select_option(id_prog)
@@ -212,23 +247,29 @@ async def executar_cotacao_agora():
                     con.commit(); con.close()
                 await context.clear_cookies(); current_step += 1
                 bar.progress(int((current_step / steps) * 100))
+            
             await browser.close(); status_text.empty(); bar.empty(); return True
     except Exception as e:
         st.error(f"Erro ao iniciar robô: {e}"); return False
 
-# --- INICIALIZA ---
-iniciar_banco_local()
+# --- 7. INICIALIZAÇÃO E FLUXO ---
+iniciar_banco_local() # Garante tabelas locais
 
-# --- CSS ---
 st.markdown("""
 <style>
     .block-container {padding-top: 4rem !important; padding-bottom: 2rem !important;}
     div.stButton > button {width: 100%; background-color: #0E436B; color: white; border-radius: 5px; font-weight: bold;}
     div.stButton > button:hover {background-color: #082d4a; color: white;}
     div[data-testid="stImage"] {display: flex; justify-content: center; align-items: center; width: 100%;}
+    
+    /* ANIMAÇÕES */
     @keyframes pulse-green { 0% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(37, 211, 102, 0); } 100% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0); } }
+    @keyframes spin-slow { 0% { transform: rotate(0deg); } 25% { transform: rotate(15deg); } 75% { transform: rotate(-15deg); } 100% { transform: rotate(0deg); } }
     .price-card { background: #f8f9fa; padding: 15px; border-radius: 10px; border: 1px solid #dee2e6; text-align: center; margin-bottom: 10px; }
     .winner-pulse { border: 2px solid #25d366 !important; background: #f0fff4 !important; animation: pulse-green 2s infinite; color: #0E436B; }
+    .card-title { font-size: 0.85rem; color: #6c757d; margin-bottom: 5px; }
+    .card-value { font-size: 1.4rem; font-weight: 800; color: #212529; }
+    .winner-icon { display: inline-block; animation: spin-slow 3s infinite ease-in-out; margin-left: 5px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -293,7 +334,7 @@ def sistema_logado():
         st.divider()
         menu = st.radio("Menu", opcoes)
         st.divider()
-        if st.button("Sair"): st.session_state['user'] = None; st.rerun()
+        if st.button("SAIR"): st.session_state['user'] = None; st.rerun()
 
     df_cotacoes = ler_dados_historico()
 
@@ -396,7 +437,7 @@ def sistema_logado():
             with st.form("p2p"):
                 st.markdown("### 👑 Inserir Oferta (Admin)")
                 c1, c2 = st.columns(2)
-                g = c1.text_input("Grupo")
+                g = st.text_input("Grupo")
                 p = c2.selectbox("Prog", ["Latam", "Smiles", "Azul"])
                 val = st.number_input("Valor", 15.0)
                 obs = st.text_input("Obs")
