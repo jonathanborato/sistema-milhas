@@ -7,12 +7,12 @@ import re
 import plotly.express as px
 from datetime import datetime
 
-# --- 1. CONFIGURAÇÃO INICIAL ---
+# --- 1. CONFIGURAÇÃO INICIAL (PRIMEIRA LINHA OBRIGATÓRIA) ---
 st.set_page_config(
-    page_title="MilhasPro | O Sistema do Milheiro",
+    page_title="MilhasPro System",
     page_icon="🚀",
     layout="wide",
-    initial_sidebar_state="collapsed" # Sidebar escondida na LP para focar na venda
+    initial_sidebar_state="expanded"
 )
 
 LOGO_URL = "https://raw.githubusercontent.com/jonathanborato/sistema-milhas/main/logo.png"
@@ -38,11 +38,18 @@ def conectar_local(): return sqlite3.connect(NOME_BANCO_LOCAL)
 
 def iniciar_banco_local():
     con = conectar_local()
-    con.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
-    con.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
+    cur = con.cursor()
+    cur.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
+    cur.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
+    cur.execute('CREATE TABLE IF NOT EXISTS carteira (id INTEGER PRIMARY KEY AUTOINCREMENT, usuario_email TEXT, data_compra TEXT, programa TEXT, quantidade INTEGER, custo_total REAL, cpm_medio REAL)')
+    cur.execute('CREATE TABLE IF NOT EXISTS mercado_p2p (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, grupo_nome TEXT, programa TEXT, tipo TEXT, valor REAL, observacao TEXT)')
+    cur.execute('CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, nome TEXT, senha_hash TEXT, data_cadastro TEXT)')
     con.commit(); con.close()
 
-# --- 4. UTILITÁRIOS ---
+# ==============================================================================
+# 4. FUNÇÕES AUXILIARES E VISUAIS (DEFINIDAS NO TOPO PARA EVITAR ERROS)
+# ==============================================================================
+
 def criar_hash(senha): return hashlib.sha256(senha.encode()).hexdigest()
 
 def validar_senha_forte(senha):
@@ -50,14 +57,27 @@ def validar_senha_forte(senha):
     return True, ""
 
 def formatar_real(valor):
-    if valor is None: return "R$ 0,00"
+    if valor is None or valor == 0: return "R$ 0,00"
     try:
         s = f"{float(valor):,.2f}"
-        s = s.replace(',', 'X').replace('.', ',').replace('X', '.')
-        return f"R$ {s}"
+        return f"R$ {s.replace(',', 'X').replace('.', ',').replace('X', '.')}"
     except: return "R$ 0,00"
 
+def criar_card_preco(titulo, valor, is_winner=False):
+    """Gera o HTML do card de preço com ou sem animação"""
+    valor_fmt = formatar_real(valor) if valor > 0 else "--"
+    css_class = "price-card winner-pulse" if is_winner and valor > 0 else "price-card"
+    icon_html = '<span class="winner-icon">🏆</span>' if is_winner and valor > 0 else ""
+    
+    return f"""
+    <div class="{css_class}">
+        <div class="card-title">{titulo} {icon_html}</div>
+        <div class="card-value">{valor_fmt}</div>
+    </div>
+    """
+
 def plotar_grafico(df, programa):
+    """Gera o gráfico moderno usando Plotly"""
     cor = "#0E436B"
     if "Latam" in programa: cor = "#E30613"
     elif "Smiles" in programa: cor = "#FF7000"
@@ -67,16 +87,21 @@ def plotar_grafico(df, programa):
     
     fig = px.area(df, x="data_hora", y="cpm", markers=True)
     fig.update_traces(line_color=cor, fillcolor=cor, marker=dict(size=6, color="white", line=dict(width=2, color=cor)))
-    fig.update_layout(height=250, margin=dict(l=0, r=0, t=10, b=0), xaxis_title=None, yaxis_title=None, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", yaxis=dict(showgrid=True, gridcolor='#f0f0f0'), xaxis=dict(showgrid=False), showlegend=False)
+    fig.update_layout(
+        height=250, 
+        margin=dict(l=0, r=0, t=10, b=0),
+        xaxis_title=None, yaxis_title=None,
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        yaxis=dict(showgrid=True, gridcolor='#f0f0f0'), xaxis=dict(showgrid=False),
+        showlegend=False
+    )
     return fig
 
-def criar_card_preco(titulo, valor, is_winner=False):
-    valor_fmt = formatar_real(valor) if valor > 0 else "--"
-    css_class = "price-card winner-pulse" if is_winner and valor > 0 else "price-card"
-    icon_html = '<span class="winner-icon">🏆</span>' if is_winner and valor > 0 else ""
-    return f'<div class="{css_class}"><div class="card-title">{titulo} {icon_html}</div><div class="card-value">{valor_fmt}</div></div>'
+# ==============================================================================
+# 5. FUNÇÕES DE DADOS (CRUD)
+# ==============================================================================
 
-# --- 5. FUNÇÕES DE DADOS ---
+# A) P2P
 def adicionar_p2p(g, p, t, v, o):
     sb = get_supabase()
     if not sb: return False, "Erro de conexão."
@@ -103,6 +128,7 @@ def pegar_ultimo_p2p(programa):
     except: pass
     return 0.0
 
+# B) CARTEIRA
 def adicionar_carteira(email, p, q, v):
     sb = get_supabase()
     if not sb: return False, "Erro conexão."
@@ -127,6 +153,7 @@ def ler_carteira_usuario(email):
         return pd.DataFrame(res.data)
     except: return pd.DataFrame()
 
+# C) HISTÓRICO (CACHE)
 @st.cache_data(ttl=60)
 def ler_dados_historico():
     con = conectar_local()
@@ -138,6 +165,7 @@ def ler_dados_historico():
     con.close()
     return df
 
+# D) LOGIN
 def registrar_usuario(nome, email, senha, telefone):
     valida, msg = validar_senha_forte(senha)
     if not valida: return False, msg
@@ -145,7 +173,7 @@ def registrar_usuario(nome, email, senha, telefone):
     if sb:
         try:
             res = sb.table("usuarios").select("id").eq("email", email).execute()
-            if len(res.data) > 0: return False, "E-mail já cadastrado."
+            if len(res.data) > 0: return False, "E-mail já existe."
             dados = {"email": email, "nome": nome, "senha_hash": hashlib.sha256(senha.encode()).hexdigest(), "telefone": telefone, "plano": "Free", "status": "Ativo"}
             sb.table("usuarios").insert(dados).execute()
             return True, "Conta criada!"
@@ -185,181 +213,110 @@ def admin_resetar_senha(id_user, nova_senha_texto):
         return True
     return False
 
-# --- INICIALIZAÇÃO ---
+# --- INICIALIZA ---
 iniciar_banco_local()
 
-# --- CSS PREMIUM (LANDING PAGE + SISTEMA) ---
+# --- CSS ---
 st.markdown("""
 <style>
-    /* Fundo e Fonte */
-    .stApp { background: linear-gradient(180deg, #F8FAFC 0%, #FFFFFF 100%); font-family: 'Segoe UI', sans-serif; }
+    .block-container {padding-top: 4rem !important; padding-bottom: 2rem !important;}
+    div.stButton > button {width: 100%; background-color: #0E436B; color: white; border-radius: 5px; font-weight: bold;}
+    div.stButton > button:hover {background-color: #082d4a; color: white;}
+    div[data-testid="stImage"] {display: flex; justify-content: center; align-items: center; width: 100%;}
     
-    /* Cards da Landing Page */
-    .lp-card {
-        background: white; padding: 25px; border-radius: 12px;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.05); text-align: center;
-        height: 100%; border: 1px solid #EEF2F6; transition: transform 0.3s ease;
-    }
-    .lp-card:hover { transform: translateY(-5px); box-shadow: 0 8px 25px rgba(14, 67, 107, 0.15); border-color: #0E436B; }
-    .lp-icon { font-size: 2.5rem; margin-bottom: 15px; display: block; }
-    .lp-title { font-weight: 700; color: #0E436B; margin-bottom: 10px; font-size: 1.1rem; }
-    .lp-text { color: #64748B; font-size: 0.9rem; line-height: 1.5; }
-
-    /* Botões */
-    div.stButton > button {
-        width: 100%; background-color: #0E436B; color: white; border-radius: 8px; 
-        font-weight: 600; border: none; padding: 0.6rem 1rem; transition: background 0.2s;
-    }
-    div.stButton > button:hover { background-color: #0A304E; color: white; box-shadow: 0 2px 8px rgba(14, 67, 107, 0.3); }
-    
-    /* Animações do Sistema */
     @keyframes pulse-green { 0% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(37, 211, 102, 0); } 100% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0); } }
     @keyframes spin-slow { 0% { transform: rotate(0deg); } 25% { transform: rotate(15deg); } 75% { transform: rotate(-15deg); } 100% { transform: rotate(0deg); } }
     
-    .price-card { background: white; padding: 15px; border-radius: 10px; border: 1px solid #E2E8F0; text-align: center; margin-bottom: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
-    .winner-pulse { border: 2px solid #25d366 !important; background: #F0FDF4 !important; animation: pulse-green 2s infinite; color: #0E436B; }
-    .card-title { font-size: 0.85rem; color: #64748B; margin-bottom: 5px; font-weight: 600; }
-    .card-value { font-size: 1.5rem; font-weight: 800; color: #1E293B; }
+    .price-card { background: #f8f9fa; padding: 15px; border-radius: 10px; border: 1px solid #dee2e6; text-align: center; margin-bottom: 10px; }
+    .winner-pulse { border: 2px solid #25d366 !important; background: #f0fff4 !important; animation: pulse-green 2s infinite; color: #0E436B; }
+    .card-title { font-size: 0.85rem; color: #6c757d; margin-bottom: 5px; }
+    .card-value { font-size: 1.4rem; font-weight: 800; color: #212529; }
     .winner-icon { display: inline-block; animation: spin-slow 3s infinite ease-in-out; margin-left: 5px; }
-    
-    /* Centralizar Imagens */
-    div[data-testid="stImage"] { display: flex; justify-content: center; align-items: center; width: 100%; }
 </style>
 """, unsafe_allow_html=True)
 
 def mostrar_paywall():
     st.error("🔒 RECURSO PRO")
-    st.info("Faça o upgrade para desbloquear esta função.")
+    st.info("Faça o upgrade para acessar.")
 
 # --- SESSÃO ---
 if 'user' not in st.session_state: st.session_state['user'] = None
 
 # ==============================================================================
-# TELA 1: LANDING PAGE (VENDAS + LOGIN)
+# TELA DE LOGIN
 # ==============================================================================
-def tela_landing_page():
-    # HERO SECTION
-    c1, c2 = st.columns([1.3, 1])
-    
-    with c1:
-        st.image(LOGO_URL, width=220)
-        st.markdown("""
-        # O Sistema Definitivo para Milheiros Profissionais 🚀
-        
-        Domine o mercado de milhas com inteligência de dados. O **MilhasPro** automatiza cotações, monitora o mercado P2P e gerencia seu patrimônio em tempo real.
-        
-        ✅ **Robô Automático:** Cotação Hotmilhas diária.  
-        ✅ **Radar P2P:** Preços reais dos grupos de Telegram.  
-        ✅ **Gestão de Carteira:** Controle seu lucro exato.
-        """)
-        st.write("")
-    
+def tela_login():
+    c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
-        # LOGIN BOX FLUTUANTE
-        st.markdown("<div style='background: white; padding: 25px; border-radius: 12px; box-shadow: 0 10px 30px rgba(14, 67, 107, 0.1); border: 1px solid #E2E8F0;'>", unsafe_allow_html=True)
-        st.markdown("<h3 style='text-align: center; color: #0E436B; margin-top: 0;'>Acessar Painel</h3>", unsafe_allow_html=True)
-        
-        tab_l, tab_c = st.tabs(["ENTRAR", "CRIAR CONTA"])
-        
-        with tab_l:
+        st.markdown(f"""<div style="display: flex; flex-direction: column; align-items: center; margin-bottom: 20px;"><img src="{LOGO_URL}" style="width: 300px; max-width: 100%;"><h3 style='text-align: center; color: #0E436B; margin-top: -30px; margin-bottom: 0;'>Acesso ao Sistema</h3></div>""", unsafe_allow_html=True)
+        tab1, tab2 = st.tabs(["ENTRAR", "CRIAR CONTA"])
+        with tab1:
             email = st.text_input("E-mail", key="log_email")
             senha = st.text_input("Senha", type="password", key="log_pass")
-            if st.button("ENTRAR AGORA", type="primary", key="btn_log"):
-                # Backdoor Admin
+            if st.button("ACESSAR SISTEMA", type="primary", key="btn_log"):
                 try:
                     if email == st.secrets["admin"]["email"] and senha == st.secrets["admin"]["senha"]:
                         st.session_state['user'] = {"nome": st.secrets["admin"]["nome"], "plano": "Admin", "email": email}
                         st.rerun()
                 except: pass
-                
                 user = autenticar_usuario(email, senha)
                 if user:
                     st.session_state['user'] = user
-                    st.toast(f"Bem-vindo, {user['nome']}!")
-                    time.sleep(0.5)
-                    st.rerun()
-                else: st.error("Dados inválidos.")
-        
-        with tab_c:
+                    st.success("Login OK!"); time.sleep(0.5); st.rerun()
+                else: st.error("Acesso negado.")
+        with tab2:
             nome = st.text_input("Nome", key="cad_nome")
-            c_email = st.text_input("E-mail", key="cad_mail")
+            email_c = st.text_input("E-mail", key="cad_mail")
             whats = st.text_input("WhatsApp", key="cad_whats")
             pw = st.text_input("Senha", type="password", key="cad_pw")
-            if st.button("CADASTRAR GRÁTIS", key="btn_cad"):
-                ok, msg = registrar_usuario(nome, c_email, pw, whats)
-                if ok: st.success("Sucesso! Faça login."); st.balloons()
+            if st.button("CADASTRAR", key="btn_cad"):
+                ok, msg = registrar_usuario(nome, email_c, pw, whats)
+                if ok: st.success(msg)
                 else: st.error(msg)
-        
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    st.markdown("---")
-
-    # FEATURE CARDS
-    st.markdown("<h2 style='text-align: center; color: #1E293B; margin-bottom: 30px;'>Por que escolher o MilhasPro?</h2>", unsafe_allow_html=True)
-    col_f1, col_f2, col_f3 = st.columns(3)
-    
-    with col_f1:
-        st.markdown("""
-        <div class="lp-card">
-            <span class="lp-icon">🤖</span>
-            <div class="lp-title">Automação Inteligente</div>
-            <div class="lp-text">Nosso robô monitora a Hotmilhas todo dia e salva o histórico para você nunca perder o pico de venda.</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col_f2:
-        st.markdown("""
-        <div class="lp-card">
-            <span class="lp-icon">👥</span>
-            <div class="lp-title">Radar P2P Exclusivo</div>
-            <div class="lp-text">Saiba quanto estão pagando nos grupos fechados. Compare preço oficial x paralelo e venda mais caro.</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with col_f3:
-        st.markdown("""
-        <div class="lp-card">
-            <span class="lp-icon">💼</span>
-            <div class="lp-title">Controle de Patrimônio</div>
-            <div class="lp-text">Registre suas compras. O sistema calcula seu lucro baseado na MELHOR cotação do dia automaticamente.</div>
-        </div>
-        """, unsafe_allow_html=True)
 
 # ==============================================================================
-# TELA 2: SISTEMA LOGADO (O QUE VOCÊ JÁ TINHA)
+# SISTEMA LOGADO
 # ==============================================================================
 def sistema_logado():
     user = st.session_state['user']
     plano = user['plano']
     
+    sb_status = "🟢 Online" if get_supabase() else "🔴 Offline"
     opcoes = ["Dashboard (Mercado)", "Minha Carteira", "Mercado P2P", "Promoções"]
     if plano == "Admin": opcoes.append("👑 Gestão de Usuários")
 
     with st.sidebar:
-        st.image(LOGO_URL, width=180)
-        st.markdown(f"<div style='text-align: center; margin-top: 10px;'>Olá, <b>{user['nome'].split()[0]}</b></div>", unsafe_allow_html=True)
-        
+        st.markdown(f"""<div style="display: flex; justify-content: center; margin-bottom: 15px;"><img src="{LOGO_URL}" style="width: 200px; max-width: 100%;"></div>""", unsafe_allow_html=True)
+        st.markdown(f"<div style='text-align: center; margin-top: -10px;'>Olá, <b>{user['nome'].split()[0]}</b></div>", unsafe_allow_html=True)
+        st.caption(f"Nuvem: {sb_status}")
         if plano == "Admin": st.success("👑 ADMIN")
         elif plano == "Pro": st.success("⭐ PRO")
         else: st.info("🔹 FREE")
-        
         st.divider()
         menu = st.radio("Menu", opcoes)
         st.divider()
-        if st.button("SAIR DO SISTEMA"): st.session_state['user'] = None; st.rerun()
+        if st.button("SAIR"): st.session_state['user'] = None; st.rerun()
 
     df_cotacoes = ler_dados_historico()
 
+    # --- DASHBOARD ---
     if menu == "Dashboard (Mercado)":
         st.header("📊 Visão de Mercado")
+        # Botão de Atualizar que apenas recarrega a página
+        if st.button("🔄 Atualizar Dados"):
+            st.cache_data.clear()
+            st.rerun()
+            
         if not df_cotacoes.empty:
             cols = st.columns(3)
             for i, p in enumerate(["Latam", "Smiles", "Azul"]):
                 d = df_cotacoes[df_cotacoes['programa'].str.contains(p, case=False, na=False)]
                 val_hot = d.iloc[-1]['cpm'] if not d.empty else 0.0
                 val_p2p = pegar_ultimo_p2p(p)
+                
                 hot_wins = val_hot > val_p2p and val_hot > 0
                 p2p_wins = val_p2p > val_hot and val_p2p > 0
+                
                 with cols[i]:
                     st.markdown(f"### {p}")
                     mc1, mc2 = st.columns(2)
@@ -367,8 +324,11 @@ def sistema_logado():
                     with mc2: st.markdown(criar_card_preco("👥 P2P", val_p2p, p2p_wins), unsafe_allow_html=True)
                     st.divider()
                     if not d.empty: st.plotly_chart(plotar_grafico(d, p), use_container_width=True)
-        else: st.warning("Aguardando robô.")
+        else: 
+            st.warning("Aguardando dados do robô.")
+            st.info("Dica: Verifique o GitHub Actions para garantir que a cotação diária está rodando.")
 
+    # --- CARTEIRA ---
     elif menu == "Minha Carteira":
         st.header("💼 Carteira")
         if plano == "Free": mostrar_paywall()
@@ -383,9 +343,12 @@ def sistema_logado():
                         ok, msg = adicionar_carteira(user['email'], p, q, v)
                         if ok: st.success("Salvo!"); time.sleep(0.5); st.rerun()
                         else: st.error(f"Erro: {msg}")
+            
             dfc = ler_carteira_usuario(user['email'])
             if not dfc.empty:
-                patrimonio = 0; custo_total = 0; view_data = []
+                patrimonio = 0
+                custo_total = 0
+                view_data = []
                 for _, row in dfc.iterrows():
                     prog_nome = row['programa'].split()[0]
                     val_hot = 0.0
@@ -394,30 +357,33 @@ def sistema_logado():
                         if not f.empty: val_hot = f.iloc[-1]['cpm']
                     val_p2p = pegar_ultimo_p2p(prog_nome)
                     melhor_preco = max(val_hot, val_p2p)
+                    origem = "Hotmilhas" if val_hot >= val_p2p else "P2P"
                     if melhor_preco == 0: origem = "Sem Cotação"
-                    else: origem = "Hotmilhas" if val_hot >= val_p2p else "P2P"
-                    qtd = float(row['quantidade']); custo = float(row['custo_total']); cpm_pago = float(row['cpm_medio'])
+                    
+                    qtd = float(row['quantidade'])
+                    custo = float(row['custo_total'])
+                    cpm_pago = float(row['cpm_medio'])
                     val_venda = (qtd / 1000) * melhor_preco
                     lucro = val_venda - custo
-                    patrimonio += val_venda; custo_total += custo
+                    patrimonio += val_venda
+                    custo_total += custo
+                    
                     view_data.append({"ID": row['id'], "Programa": row['programa'], "Qtd": f"{qtd:,.0f}".replace(',', '.'), "Custo": formatar_real(custo), "CPM Pago": formatar_real(cpm_pago), "Melhor Cotação": f"{formatar_real(melhor_preco)} ({origem})", "Lucro (Hoje)": formatar_real(lucro), "val_lucro_raw": lucro})
+                
                 k1, k2, k3 = st.columns(3)
                 k1.metric("Total Investido", formatar_real(custo_total))
                 k2.metric("Patrimônio Atual", formatar_real(patrimonio))
                 delta_perc = ((patrimonio/custo_total)-1)*100 if custo_total > 0 else 0
                 k3.metric("Lucro Projetado", formatar_real(patrimonio - custo_total), delta=f"{delta_perc:.1f}%")
-                st.divider()
                 
-                # Função de estilo segura
-                def color_lucro(val):
-                    if isinstance(val, str) and "-" in val: return 'color: red; font-weight: bold;'
-                    return 'color: green; font-weight: bold;'
-
-                st.dataframe(pd.DataFrame(view_data).style.applymap(color_lucro, subset=['Lucro (Hoje)']).drop(columns=['val_lucro_raw']), use_container_width=True)
+                st.divider()
+                st.dataframe(pd.DataFrame(view_data).style.applymap(lambda x: 'color: green' if x > 0 else 'color: red', subset=['val_lucro_raw']).drop(columns=['val_lucro_raw']), use_container_width=True)
+                
                 rid = st.number_input("ID para remover", step=1)
                 if st.button("🗑️ Remover Lote"): remover_carteira(rid); st.rerun()
             else: st.info("Carteira vazia.")
 
+    # --- P2P ---
     elif menu == "Mercado P2P":
         st.header("📢 Radar P2P")
         if plano == "Admin":
@@ -440,6 +406,7 @@ def sistema_logado():
             dfp['valor'] = dfp['valor'].apply(formatar_real)
             st.dataframe(dfp, use_container_width=True)
 
+    # --- PROMOÇÕES ---
     elif menu == "Promoções":
         st.header("🔥 Radar")
         if plano == "Free": mostrar_paywall()
@@ -451,6 +418,7 @@ def sistema_logado():
                 for _, r in dfp.iterrows(): st.markdown(f"[{r['titulo']}]({r['link']})")
             except: st.write("Nada ainda.")
 
+    # --- ADMIN CRM ---
     elif menu == "👑 Gestão de Usuários":
         st.header("Admin CRM")
         df_users = admin_listar_todos()
@@ -469,6 +437,6 @@ def sistema_logado():
                             st.success("OK"); time.sleep(1); st.rerun()
             st.dataframe(df_users)
 
-# MAIN ROUTER
+# MAIN
 if st.session_state['user']: sistema_logado()
-else: tela_landing_page()
+else: tela_login()
