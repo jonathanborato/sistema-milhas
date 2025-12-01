@@ -31,7 +31,7 @@ def get_supabase():
         return create_client(url, key)
     except: return None
 
-# --- 3. BANCO LOCAL (CACHE) ---
+# --- 3. BANCO LOCAL ---
 NOME_BANCO_LOCAL = "milhas.db"
 def conectar_local(): return sqlite3.connect(NOME_BANCO_LOCAL)
 
@@ -52,16 +52,17 @@ def validar_senha_forte(senha):
     if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", senha): return False, "Precisa de caractere especial (@#$)."
     return True, ""
 
-# --- 4. FUNÇÕES DE DADOS (NUVEM) ---
+# --- 4. FUNÇÕES DE DADOS (NUVEM OBRIGATÓRIA) ---
 
-# A) P2P - CORRIGIDO PARA PEGAR SEMPRE O ÚLTIMO
-def adicionar_p2p(g, p, t, v, o):
+# A) P2P (SIMPLIFICADO: SÓ REGISTRA 'COMPRA')
+def adicionar_p2p(g, p, v, o):
     sb = get_supabase()
     if not sb: return False, "Erro de conexão."
     try:
+        # Forçamos o tipo para 'COMPRA' (O mercado comprando de você)
         dados = {
             "data_hora": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "grupo_nome": g, "programa": p, "tipo": t, "valor": float(v), "observacao": o
+            "grupo_nome": g, "programa": p, "tipo": "COMPRA", "valor": float(v), "observacao": o
         }
         sb.table("mercado_p2p").insert(dados).execute()
         return True, "Sucesso"
@@ -79,9 +80,8 @@ def pegar_ultimo_p2p(programa):
     sb = get_supabase()
     if not sb: return 0.0
     try:
-        # CORREÇÃO AQUI: Order by ID DESC garante que pegamos o ÚLTIMO registro inserido (o mais atual)
-        # Antes estava por Valor, o que mantinha preços antigos se fossem mais altos
-        res = sb.table("mercado_p2p").select("valor").ilike("programa", f"%{programa}%").eq("tipo", "COMPRA").order("id", desc=True).limit(1).execute()
+        # Pega o último registro inserido para este programa (ID DESC)
+        res = sb.table("mercado_p2p").select("valor").ilike("programa", f"%{programa}%").order("id", desc=True).limit(1).execute()
         if len(res.data) > 0: return float(res.data[0]['valor'])
     except: pass
     return 0.0
@@ -89,16 +89,12 @@ def pegar_ultimo_p2p(programa):
 # B) CARTEIRA
 def adicionar_carteira(email, p, q, v):
     sb = get_supabase()
-    if not sb: return False, "Erro de conexão."
+    if not sb: return False, "Erro conexão."
     try:
         cpm = float(v) / (float(q) / 1000) if float(q) > 0 else 0
         dados = {
-            "usuario_email": email,
-            "data_compra": datetime.now().strftime("%Y-%m-%d"),
-            "programa": p,
-            "quantidade": int(q),
-            "custo_total": float(v),
-            "cpm_medio": cpm
+            "usuario_email": email, "data_compra": datetime.now().strftime("%Y-%m-%d"),
+            "programa": p, "quantidade": int(q), "custo_total": float(v), "cpm_medio": cpm
         }
         sb.table("carteira").insert(dados).execute()
         return True, "Sucesso"
@@ -118,7 +114,7 @@ def ler_carteira_usuario(email):
         return pd.DataFrame(res.data)
     except: return pd.DataFrame()
 
-# C) HISTÓRICO (LOCAL)
+# C) HISTÓRICO LOCAL
 @st.cache_data(ttl=60)
 def ler_dados_historico():
     con = conectar_local()
@@ -300,13 +296,18 @@ def sistema_logado():
                 
                 for _, row in dfc.iterrows():
                     prog_nome = row['programa'].split()[0]
+                    # Busca Cotações
                     val_hot = 0.0
                     if not df_cotacoes.empty:
                         f = df_cotacoes[df_cotacoes['programa'].str.contains(prog_nome, case=False, na=False)]
                         if not f.empty: val_hot = f.iloc[-1]['cpm']
                     
                     val_p2p = pegar_ultimo_p2p(prog_nome)
+                    
+                    # Valuation: Pega o maior valor (Hotmilhas ou P2P)
                     melhor_preco = max(val_hot, val_p2p)
+                    origem = "Hotmilhas" if val_hot >= val_p2p else "P2P"
+                    if melhor_preco == 0: origem = "Sem Cotação"
                     
                     qtd = float(row['quantidade'])
                     custo = float(row['custo_total'])
@@ -314,6 +315,7 @@ def sistema_logado():
                     
                     val_venda = (qtd / 1000) * melhor_preco
                     lucro = val_venda - custo
+                    
                     patrimonio += val_venda
                     custo_total += custo
                     
@@ -330,17 +332,7 @@ def sistema_logado():
                           delta=f"{((patrimonio/custo_total)-1)*100:.1f}%" if custo_total > 0 else 0)
                 
                 st.divider()
-                
-                # TABELA FORMATADA
-                df_view = pd.DataFrame(view_data)
-                st.dataframe(
-                    df_view.style.format({
-                        "Custo": "R$ {:,.2f}",
-                        "CPM Pago": "R$ {:,.2f}",
-                        "Lucro (Hoje)": "R$ {:,.2f}"
-                    }).applymap(lambda x: 'color: green' if x > 0 else 'color: red', subset=['Lucro (Hoje)']),
-                    use_container_width=True
-                )
+                st.dataframe(pd.DataFrame(view_data).style.format({"Custo": "R$ {:,.2f}", "CPM Pago": "R$ {:,.2f}", "Lucro (Hoje)": "R$ {:,.2f}"}).applymap(lambda x: 'color: green' if x > 0 else 'color: red', subset=['Lucro (Hoje)']), use_container_width=True)
                 
                 rid = st.number_input("ID para remover", step=1)
                 if st.button("🗑️ Remover Lote"):
@@ -354,20 +346,20 @@ def sistema_logado():
         st.header("📢 Radar P2P")
         if plano == "Admin":
             with st.form("p2p"):
-                st.markdown("### 👑 Inserir Oferta (Admin)")
+                st.markdown("### 👑 Inserir Oportunidade P2P (Admin)")
                 c1, c2 = st.columns(2)
-                g = c1.text_input("Grupo")
-                p = c2.selectbox("Prog", ["Latam", "Smiles", "Azul"])
-                t = st.radio("Tipo", ["VENDA (Alguém vendendo)", "COMPRA (Alguém comprando)"])
-                val = st.number_input("Valor", 15.0)
-                obs = st.text_input("Obs")
-                if st.form_submit_button("PUBLICAR"):
-                    ok, msg = adicionar_p2p(g, p, "COMPRA" if "COMPRA" in t else "VENDA", val, obs)
+                g = c1.text_input("Grupo de Origem (Ex: Balcão Milhas)")
+                p = c2.selectbox("Programa", ["Latam", "Smiles", "Azul"])
+                # REMOVIDO SELECT "TIPO". AGORA É SEMPRE OFERTA DE COMPRA
+                val = st.number_input("Valor Ofertado (R$)", 15.0)
+                obs = st.text_input("Obs (Ex: Pagamento imediato)")
+                if st.form_submit_button("Publicar Oferta"):
+                    ok, msg = adicionar_p2p(g, p, val, obs)
                     if ok: st.success("Salvo!"); time.sleep(0.5); st.rerun()
                     else: st.error(f"Erro: {msg}")
         else:
             if plano == "Free": mostrar_paywall(); st.stop()
-            else: st.info("ℹ️ Dados verificados pela administração.")
+            else: st.info("ℹ️ Melhores ofertas de compra encontradas nos grupos.")
 
         dfp = ler_p2p_todos()
         if not dfp.empty: st.dataframe(dfp, use_container_width=True)
