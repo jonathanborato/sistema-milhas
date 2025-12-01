@@ -31,7 +31,7 @@ def get_supabase():
         return create_client(url, key)
     except: return None
 
-# --- 3. BANCO LOCAL (CACHE DO ROBÔ) ---
+# --- 3. BANCO LOCAL (CACHE) ---
 NOME_BANCO_LOCAL = "milhas.db"
 def conectar_local(): return sqlite3.connect(NOME_BANCO_LOCAL)
 
@@ -52,9 +52,9 @@ def validar_senha_forte(senha):
     if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", senha): return False, "Precisa de caractere especial (@#$)."
     return True, ""
 
-# --- 4. FUNÇÕES DE DADOS (NUVEM OBRIGATÓRIA) ---
+# --- 4. FUNÇÕES DE DADOS (NUVEM) ---
 
-# A) P2P
+# A) P2P - CORRIGIDO PARA PEGAR SEMPRE O ÚLTIMO
 def adicionar_p2p(g, p, t, v, o):
     sb = get_supabase()
     if not sb: return False, "Erro de conexão."
@@ -79,7 +79,9 @@ def pegar_ultimo_p2p(programa):
     sb = get_supabase()
     if not sb: return 0.0
     try:
-        res = sb.table("mercado_p2p").select("valor").ilike("programa", f"%{programa}%").eq("tipo", "COMPRA").order("valor", desc=True).limit(1).execute()
+        # CORREÇÃO AQUI: Order by ID DESC garante que pegamos o ÚLTIMO registro inserido (o mais atual)
+        # Antes estava por Valor, o que mantinha preços antigos se fossem mais altos
+        res = sb.table("mercado_p2p").select("valor").ilike("programa", f"%{programa}%").eq("tipo", "COMPRA").order("id", desc=True).limit(1).execute()
         if len(res.data) > 0: return float(res.data[0]['valor'])
     except: pass
     return 0.0
@@ -116,7 +118,7 @@ def ler_carteira_usuario(email):
         return pd.DataFrame(res.data)
     except: return pd.DataFrame()
 
-# C) HISTÓRICO ROBÔ
+# C) HISTÓRICO (LOCAL)
 @st.cache_data(ttl=60)
 def ler_dados_historico():
     con = conectar_local()
@@ -274,7 +276,7 @@ def sistema_logado():
                     if not d.empty: st.line_chart(d, x="data_hora", y="cpm", height=200)
         else: st.warning("Aguardando robô.")
 
-    # --- CARTEIRA (CORREÇÃO DE FORMATAÇÃO AQUI) ---
+    # --- CARTEIRA ---
     elif menu == "Minha Carteira":
         st.header("💼 Carteira")
         if plano == "Free": mostrar_paywall()
@@ -298,18 +300,13 @@ def sistema_logado():
                 
                 for _, row in dfc.iterrows():
                     prog_nome = row['programa'].split()[0]
-                    # Busca Cotações
                     val_hot = 0.0
                     if not df_cotacoes.empty:
                         f = df_cotacoes[df_cotacoes['programa'].str.contains(prog_nome, case=False, na=False)]
                         if not f.empty: val_hot = f.iloc[-1]['cpm']
                     
                     val_p2p = pegar_ultimo_p2p(prog_nome)
-                    
-                    # Lógica de Valuation
                     melhor_preco = max(val_hot, val_p2p)
-                    origem = "Hotmilhas" if val_hot >= val_p2p else "P2P"
-                    if melhor_preco == 0: origem = "Sem Cotação"
                     
                     qtd = float(row['quantidade'])
                     custo = float(row['custo_total'])
@@ -317,22 +314,15 @@ def sistema_logado():
                     
                     val_venda = (qtd / 1000) * melhor_preco
                     lucro = val_venda - custo
-                    
                     patrimonio += val_venda
                     custo_total += custo
                     
-                    # AQUI: MANTEMOS COMO NÚMERO (FLOAT) E FORMATAMOS NA TABELA DEPOIS
                     view_data.append({
-                        "ID": row['id'], 
-                        "Programa": row['programa'], 
-                        "Qtd": f"{qtd:,.0f}", # Formata milhar (1,000)
-                        "Custo": custo, # Float puro
-                        "CPM Pago": cpm_pago, # Float puro
-                        "Melhor Cotação": f"R$ {melhor_preco:.2f} ({origem})",
-                        "Lucro (Hoje)": lucro # Float puro
+                        "ID": row['id'], "Programa": row['programa'], "Qtd": f"{qtd:,.0f}",
+                        "Custo": custo, "CPM Pago": cpm_pago, 
+                        "Melhor Cotação": f"R$ {melhor_preco:.2f}", "Lucro (Hoje)": lucro
                     })
                 
-                # KPIs
                 k1, k2, k3 = st.columns(3)
                 k1.metric("Total Investido", f"R$ {custo_total:,.2f}")
                 k2.metric("Patrimônio Atual", f"R$ {patrimonio:,.2f}")
@@ -341,22 +331,17 @@ def sistema_logado():
                 
                 st.divider()
                 
-                # TABELA COM FORMATAÇÃO MONETÁRIA CORRETA
+                # TABELA FORMATADA
                 df_view = pd.DataFrame(view_data)
-                
-                # Aplica formatação R$ nas colunas numéricas
                 st.dataframe(
-                    df_view.style
-                    .format({
+                    df_view.style.format({
                         "Custo": "R$ {:,.2f}",
                         "CPM Pago": "R$ {:,.2f}",
                         "Lucro (Hoje)": "R$ {:,.2f}"
-                    })
-                    .applymap(lambda x: 'color: green' if x > 0 else 'color: red', subset=['Lucro (Hoje)']), 
+                    }).applymap(lambda x: 'color: green' if x > 0 else 'color: red', subset=['Lucro (Hoje)']),
                     use_container_width=True
                 )
                 
-                # REMOÇÃO
                 rid = st.number_input("ID para remover", step=1)
                 if st.button("🗑️ Remover Lote"):
                     remover_carteira(rid)
@@ -373,7 +358,7 @@ def sistema_logado():
                 c1, c2 = st.columns(2)
                 g = c1.text_input("Grupo")
                 p = c2.selectbox("Prog", ["Latam", "Smiles", "Azul"])
-                t = st.radio("Tipo", ["VENDA", "COMPRA"])
+                t = st.radio("Tipo", ["VENDA (Alguém vendendo)", "COMPRA (Alguém comprando)"])
                 val = st.number_input("Valor", 15.0)
                 obs = st.text_input("Obs")
                 if st.form_submit_button("PUBLICAR"):
@@ -382,12 +367,12 @@ def sistema_logado():
                     else: st.error(f"Erro: {msg}")
         else:
             if plano == "Free": mostrar_paywall(); st.stop()
-            else: st.info("ℹ️ Dados verificados.")
+            else: st.info("ℹ️ Dados verificados pela administração.")
 
         dfp = ler_p2p_todos()
         if not dfp.empty: st.dataframe(dfp, use_container_width=True)
 
-    # --- PROMOS ---
+    # --- PROMOÇÕES ---
     elif menu == "Promoções":
         st.header("🔥 Radar")
         if plano == "Free": mostrar_paywall()
@@ -416,7 +401,11 @@ def sistema_logado():
                     if st.form_submit_button("SALVAR"):
                         if admin_atualizar_dados(int(u_dados['id']), n, u_dados['email'], u_dados['telefone'], p, s):
                             st.success("OK"); time.sleep(1); st.rerun()
-            dataframe(df_users)
+            with c2:
+                npw = st.text_input("Nova Senha")
+                if st.button("RESETAR SENHA") and len(npw)>3:
+                    admin_resetar_senha(int(u_dados['id']), npw); st.success("Senha alterada")
+            st.dataframe(df_users)
 
 # MAIN
 if st.session_state['user']: sistema_logado()
