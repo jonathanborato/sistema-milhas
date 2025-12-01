@@ -5,6 +5,8 @@ import hashlib
 import time
 import re
 import asyncio
+import subprocess # NECESSÁRIO PARA INSTALAR O NAVEGADOR
+import sys
 from datetime import datetime
 import plotly.express as px
 
@@ -18,14 +20,26 @@ st.set_page_config(
 
 LOGO_URL = "https://raw.githubusercontent.com/jonathanborato/sistema-milhas/main/logo.png"
 
-# --- 2. CONFIGURAÇÃO SUPABASE ---
+# --- 2. CORREÇÃO DO PLAYWRIGHT NA NUVEM (NOVO!) ---
+# Isso garante que o navegador seja baixado no servidor do Streamlit
+@st.cache_resource
+def instalar_navegadores():
+    try:
+        # Roda o comando 'playwright install chromium' no terminal do servidor
+        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"])
+    except Exception as e:
+        print(f"Erro ao instalar navegador: {e}")
+
+instalar_navegadores() # Executa a instalação ao abrir o app
+
+# --- CONFIGURAÇÃO SUPABASE ---
 try:
     from supabase import create_client
     SUPABASE_AVAILABLE = True
 except ImportError:
     SUPABASE_AVAILABLE = False
 
-# --- CONFIGURAÇÃO PLAYWRIGHT (ROBÔ) ---
+# --- CONFIGURAÇÃO PLAYWRIGHT IMPORT ---
 try:
     from playwright.async_api import async_playwright
     PLAYWRIGHT_AVAILABLE = True
@@ -93,13 +107,13 @@ def criar_card_preco(titulo, valor, is_winner=False):
     </div>
     """
 
-# --- 4. ROBÔ DE COTAÇÃO (NOVO!) ---
+# --- 4. ROBÔ DE COTAÇÃO ---
 async def executar_cotacao_agora():
     if not PLAYWRIGHT_AVAILABLE:
         st.error("Biblioteca Playwright não instalada.")
         return False
 
-    SEU_EMAIL = "jonathanfborato@gmail.com" # Email genérico para cotação
+    SEU_EMAIL = "jonathanfborato@gmail.com"
     PROGRAMAS = {"1": "Smiles", "2": "Latam", "3": "Azul"}
     QTD_MILHAS = "100000"
     
@@ -108,8 +122,8 @@ async def executar_cotacao_agora():
     
     try:
         async with async_playwright() as p:
-            # Tenta lançar o browser (requer packages.txt configurado no Streamlit Cloud)
-            browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
+            # Argumentos essenciais para rodar no Linux do servidor
+            browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'])
             context = await browser.new_context()
             page = await context.new_page()
             
@@ -120,8 +134,6 @@ async def executar_cotacao_agora():
                 status_text.text(f"🤖 Robô consultando: {nome_prog}...")
                 try:
                     await page.goto("https://hotmilhas.com.br/", timeout=60000)
-                    
-                    # Preenchimento
                     await page.get_by_role("textbox", name="Digite seu e-mail *").fill(SEU_EMAIL)
                     await page.get_by_role("combobox").select_option(id_prog)
                     
@@ -133,15 +145,11 @@ async def executar_cotacao_agora():
 
                     await page.locator("#form").get_by_role("button", name="Cotar minhas milhas").click(force=True)
                     
-                    # Espera inteligente
                     try:
                         await page.wait_for_selector("text=R$", timeout=15000)
-                    except:
-                        pass # Se não achar rápido, tenta ler mesmo assim
+                    except: pass
 
-                    # Leitura
                     texto = await page.locator("body").inner_text()
-                    # Regex busca preço de 90 dias
                     padrao = r"(?:em|Até)\s+(90)\s+dia[s]?.*?R\$\s?([\d\.,]+)"
                     match = re.search(padrao, texto, re.DOTALL | re.IGNORECASE)
                     
@@ -149,7 +157,6 @@ async def executar_cotacao_agora():
                         valor_float = float(match.group(2).replace('.', '').replace(',', '.'))
                         cpm = valor_float / 100
                         
-                        # Salva no Banco Local
                         con = conectar_local()
                         agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         con.execute('INSERT INTO historico (data_hora, email, prazo_dias, valor_total, cpm) VALUES (?, ?, ?, ?, ?)', (agora, nome_prog, 90, valor_float, cpm))
@@ -356,13 +363,17 @@ def sistema_logado():
         st.markdown(f"""<div style="display: flex; justify-content: center; margin-bottom: 15px;"><img src="{LOGO_URL}" style="width: 200px; max-width: 100%;"></div>""", unsafe_allow_html=True)
         st.markdown(f"<div style='text-align: center; margin-top: -10px;'>Olá, <b>{user['nome'].split()[0]}</b></div>", unsafe_allow_html=True)
         st.caption(f"Nuvem: {sb_status}")
+        
         if plano == "Admin": st.success("👑 ADMIN")
         elif plano == "Pro": st.success("⭐ PRO")
         else: st.info("🔹 FREE")
+        
         st.divider()
         menu = st.radio("Menu", opcoes)
         st.divider()
         if st.button("SAIR"): st.session_state['user'] = None; st.rerun()
+
+    df_cotacoes = ler_dados_historico()
 
     # --- DASHBOARD ---
     if menu == "Dashboard (Mercado)":
@@ -371,21 +382,16 @@ def sistema_logado():
         with col_title:
             st.header("📊 Visão de Mercado")
         with col_btn:
-            # BOTÃO DE ATUALIZAR AGORA
             if st.button("🔄 Atualizar Cotações"):
-                with st.spinner("Robô consultando Hotmilhas em tempo real... (Aguarde 40s)"):
-                    # Roda o scraping
+                with st.spinner("Robô consultando Hotmilhas... (Isso leva ~40s)"):
                     sucesso = asyncio.run(executar_cotacao_agora())
                     if sucesso:
-                        st.success("Dados atualizados!")
-                        st.cache_data.clear() # Limpa o cache para mostrar o novo preço
+                        st.success("Atualizado!")
+                        st.cache_data.clear()
                         time.sleep(1)
                         st.rerun()
                     else:
-                        st.error("Erro ao rodar robô. Verifique se o servidor tem permissão.")
-
-        # Carrega dados após possível atualização
-        df_cotacoes = ler_dados_historico()
+                        st.error("Erro no robô.")
 
         if not df_cotacoes.empty:
             cols = st.columns(3)
@@ -405,11 +411,10 @@ def sistema_logado():
                     with mc2: st.markdown(criar_card_preco("👥 P2P", val_p2p, p2p_wins), unsafe_allow_html=True)
                     st.divider()
                     if not d.empty: st.plotly_chart(plotar_grafico(d, p), use_container_width=True)
-        else: st.warning("Aguardando primeira execução do robô.")
+        else: st.warning("Aguardando robô.")
 
     # --- CARTEIRA ---
     elif menu == "Minha Carteira":
-        df_cotacoes = ler_dados_historico() # Precisa carregar para calcular valuation
         st.header("💼 Carteira")
         if plano == "Free": mostrar_paywall()
         else:
@@ -457,7 +462,7 @@ def sistema_logado():
                 k3.metric("Lucro Projetado", formatar_real(patrimonio - custo_total), delta=f"{delta_perc:.1f}%")
                 
                 st.divider()
-                st.dataframe(pd.DataFrame(view_data).style.applymap(lambda x: 'color: green' if x > 0 else 'color: red', subset=['val_lucro_raw']), use_container_width=True)
+                st.dataframe(pd.DataFrame(view_data).style.applymap(lambda x: 'color: green' if x > 0 else 'color: red', subset=['val_lucro_raw']).drop(columns=['val_lucro_raw']), use_container_width=True)
                 
                 rid = st.number_input("ID para remover", step=1)
                 if st.button("🗑️ Remover Lote"): remover_carteira(rid); st.rerun()
