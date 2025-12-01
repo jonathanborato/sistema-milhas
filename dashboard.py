@@ -429,7 +429,27 @@ def sistema_logado():
         dfp = ler_p2p_todos()
         if not dfp.empty:
             dfp['valor'] = dfp['valor'].apply(formatar_real)
-            st.dataframe(dfp, use_container_width=True)
+           # --- CORREÇÃO DA TABELA DA CARTEIRA ---
+                st.divider()
+                
+                # Cria o DataFrame com os dados
+                df_view = pd.DataFrame(view_data)
+                
+                # Função simples para colorir: Se tiver sinal de menos (-), fica vermelho
+                def color_lucro(val):
+                    if "-" in str(val):
+                        return 'color: #d9534f; font-weight: bold;' # Vermelho
+                    return 'color: #28a745; font-weight: bold;' # Verde
+
+                # Remove a coluna de cálculo interno (val_lucro_raw) antes de exibir
+                # E aplica a cor na coluna 'Lucro (Hoje)'
+                st.dataframe(
+                    df_view.drop(columns=['val_lucro_raw']).style.applymap(color_lucro, subset=['Lucro (Hoje)']), 
+                    use_container_width=True
+                )
+                # --------------------------------------
+                
+                rid = st.number_input("ID para remover", step=1)
 
     # --- PROMOÇÕES (LIVE FEED FIX) ---
     elif menu == "Promoções":
