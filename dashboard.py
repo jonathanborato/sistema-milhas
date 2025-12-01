@@ -41,7 +41,7 @@ def iniciar_banco_local():
     con.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
     con.commit(); con.close()
 
-# --- SEGURANÇA ---
+# --- SEGURANÇA E UTILITÁRIOS ---
 def criar_hash(senha): return hashlib.sha256(senha.encode()).hexdigest()
 
 def validar_senha_forte(senha):
@@ -52,10 +52,18 @@ def validar_senha_forte(senha):
     if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", senha): return False, "Precisa de caractere especial (@#$)."
     return True, ""
 
+# --- NOVA FUNÇÃO: FORMATAÇÃO BRASILEIRA R$ ---
+def formatar_real(valor):
+    if valor is None: return "R$ 0,00"
+    # Formata primeiro como padrão americano (1,234.56)
+    s = f"{float(valor):,.2f}"
+    # Troca vírgula por X, ponto por vírgula, X por ponto
+    s = s.replace(',', 'X').replace('.', ',').replace('X', '.')
+    return f"R$ {s}"
+
 # --- 4. FUNÇÕES DE DADOS ---
 
-# A) P2P (COMPRA)
-def adicionar_p2p(g, p, v, o):
+def adicionar_p2p(g, p, t, v, o):
     sb = get_supabase()
     if not sb: return False, "Erro de conexão."
     try:
@@ -81,7 +89,6 @@ def pegar_ultimo_p2p(programa):
     except: pass
     return 0.0
 
-# B) CARTEIRA
 def adicionar_carteira(email, p, q, v):
     sb = get_supabase()
     if not sb: return False, "Erro conexão."
@@ -106,7 +113,6 @@ def ler_carteira_usuario(email):
         return pd.DataFrame(res.data)
     except: return pd.DataFrame()
 
-# C) HISTÓRICO LOCAL
 @st.cache_data(ttl=60)
 def ler_dados_historico():
     con = conectar_local()
@@ -118,7 +124,6 @@ def ler_dados_historico():
     con.close()
     return df
 
-# D) USUÁRIOS
 def registrar_usuario(nome, email, senha, telefone):
     sb = get_supabase()
     if not sb: return False, "Sem conexão."
@@ -166,69 +171,16 @@ def admin_resetar_senha(id_user, nova_senha_texto):
 # --- INICIALIZA ---
 iniciar_banco_local()
 
-# --- CSS E ANIMAÇÕES ---
+# --- CSS ---
 st.markdown("""
 <style>
     .block-container {padding-top: 4rem !important; padding-bottom: 2rem !important;}
     div.stButton > button {width: 100%; background-color: #0E436B; color: white; border-radius: 5px; font-weight: bold;}
     div.stButton > button:hover {background-color: #082d4a; color: white;}
     div[data-testid="stImage"] {display: flex; justify-content: center; align-items: center; width: 100%;}
-    
-    /* Animação de Pulso Verde */
-    @keyframes pulse-green {
-        0% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0.7); }
-        70% { box-shadow: 0 0 0 10px rgba(37, 211, 102, 0); }
-        100% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0); }
-    }
-    
-    /* Animação de Giro Lento para o Troféu */
-    @keyframes spin-slow {
-        0% { transform: rotate(0deg); }
-        25% { transform: rotate(15deg); }
-        50% { transform: rotate(0deg); }
-        75% { transform: rotate(-15deg); }
-        100% { transform: rotate(0deg); }
-    }
-
-    /* Estilo Base do Card de Preço */
-    .price-card {
-        background: #f8f9fa;
-        padding: 15px;
-        border-radius: 10px;
-        border: 2px solid #e9ecef;
-        text-align: center;
-        transition: all 0.3s ease;
-    }
-    
-    /* Estilo do Card Vencedor */
-    .winner-pulse {
-        border: 2px solid #25d366 !important; /* Borda Verde */
-        background: #f0fff4 !important; /* Fundo Verde Claro */
-        animation: pulse-green 2s infinite;
-        font-weight: bold;
-        color: #0E436B;
-    }
-
-    .card-title { font-size: 0.9rem; color: #6c757d; margin-bottom: 5px; }
-    .card-value { font-size: 1.6rem; font-weight: 800; color: #212529; }
-    .winner-icon { display: inline-block; animation: spin-slow 3s infinite ease-in-out; margin-left: 8px; font-size: 1.2rem;}
-
+    .metric-card {background: #f0f2f6; padding: 15px; border-radius: 8px;}
 </style>
 """, unsafe_allow_html=True)
-
-# --- FUNÇÃO AUXILIAR PARA GERAR CARD ANIMADO ---
-def criar_card_preco(titulo, valor, is_winner=False):
-    valor_fmt = f"R$ {valor:.2f}" if valor > 0 else "--"
-    css_class = "price-card winner-pulse" if is_winner and valor > 0 else "price-card"
-    icon_html = '<span class="winner-icon">🏆</span>' if is_winner and valor > 0 else ""
-    
-    html = f"""
-    <div class="{css_class}">
-        <div class="card-title">{titulo} {icon_html}</div>
-        <div class="card-value">{valor_fmt}</div>
-    </div>
-    """
-    return html
 
 def mostrar_paywall():
     st.error("🔒 RECURSO PRO")
@@ -260,7 +212,6 @@ def tela_login():
                     st.session_state['user'] = user
                     st.success("Login OK!"); time.sleep(0.5); st.rerun()
                 else: st.error("Acesso negado.")
-        
         with tab2:
             nome = st.text_input("Nome", key="cad_nome")
             email_c = st.text_input("E-mail", key="cad_mail")
@@ -298,11 +249,9 @@ def sistema_logado():
 
     df_cotacoes = ler_dados_historico()
 
-    # --- DASHBOARD (COM ANIMAÇÃO) ---
+    # --- DASHBOARD ---
     if menu == "Dashboard (Mercado)":
         st.header("📊 Visão de Mercado")
-        st.markdown("Compare as cotações e veja onde suas milhas valem mais agora.")
-        st.divider()
         if not df_cotacoes.empty:
             cols = st.columns(3)
             for i, p in enumerate(["Latam", "Smiles", "Azul"]):
@@ -310,25 +259,16 @@ def sistema_logado():
                 val_hot = d.iloc[-1]['cpm'] if not d.empty else 0.0
                 val_p2p = pegar_ultimo_p2p(p)
                 
-                # Lógica de quem ganha
-                hot_wins = val_hot > val_p2p and val_hot > 0
-                p2p_wins = val_p2p > val_hot and val_p2p > 0
-                # Se empate, ninguém ganha destaque
-                
                 with cols[i]:
-                    st.subheader(f"{p}")
+                    st.markdown(f"### {p}")
                     mc1, mc2 = st.columns(2)
-                    with mc1:
-                        # Usa a função auxiliar para gerar o HTML animado
-                        st.markdown(criar_card_preco("🤖 Hotmilhas", val_hot, hot_wins), unsafe_allow_html=True)
-                    with mc2:
-                        st.markdown(criar_card_preco("👥 P2P (Grupos)", val_p2p, p2p_wins), unsafe_allow_html=True)
-                        
+                    with mc1: st.metric("🤖 Hotmilhas", formatar_real(val_hot) if val_hot > 0 else "--")
+                    with mc2: st.metric("👥 P2P", formatar_real(val_p2p) if val_p2p > 0 else "--")
                     st.divider()
                     if not d.empty: st.line_chart(d, x="data_hora", y="cpm", height=200)
         else: st.warning("Aguardando robô.")
 
-    # --- CARTEIRA ---
+    # --- CARTEIRA (COM FORMATAÇÃO BR) ---
     elif menu == "Minha Carteira":
         st.header("💼 Carteira")
         if plano == "Free": mostrar_paywall()
@@ -352,12 +292,15 @@ def sistema_logado():
                 
                 for _, row in dfc.iterrows():
                     prog_nome = row['programa'].split()[0]
+                    # Busca Cotações
                     val_hot = 0.0
                     if not df_cotacoes.empty:
                         f = df_cotacoes[df_cotacoes['programa'].str.contains(prog_nome, case=False, na=False)]
                         if not f.empty: val_hot = f.iloc[-1]['cpm']
                     
                     val_p2p = pegar_ultimo_p2p(prog_nome)
+                    
+                    # Valuation
                     melhor_preco = max(val_hot, val_p2p)
                     origem = "Hotmilhas" if val_hot >= val_p2p else "P2P"
                     if melhor_preco == 0: origem = "Sem Cotação"
@@ -365,51 +308,82 @@ def sistema_logado():
                     qtd = float(row['quantidade'])
                     custo = float(row['custo_total'])
                     cpm_pago = float(row['cpm_medio'])
+                    
                     val_venda = (qtd / 1000) * melhor_preco
                     lucro = val_venda - custo
+                    
                     patrimonio += val_venda
                     custo_total += custo
                     
+                    # AQUI APLICAMOS A FORMATAÇÃO NAS STRINGS DA TABELA
                     view_data.append({
-                        "ID": row['id'], "Programa": row['programa'], "Qtd": f"{qtd:,.0f}",
-                        "Custo": custo, "CPM Pago": cpm_pago, 
-                        "Melhor Cotação": f"R$ {melhor_preco:.2f} ({origem})", "Lucro (Hoje)": lucro
+                        "ID": row['id'], 
+                        "Programa": row['programa'], 
+                        "Qtd": f"{qtd:,.0f}".replace(',', '.'), # Milhar com ponto
+                        "Custo": formatar_real(custo),
+                        "CPM Pago": formatar_real(cpm_pago), 
+                        "Melhor Cotação": f"{formatar_real(melhor_preco)} ({origem})",
+                        "Lucro (Hoje)": formatar_real(lucro),
+                        "val_lucro_raw": lucro # Coluna escondida para usar na cor
                     })
                 
+                # KPIs COM FORMATAÇÃO BR
                 k1, k2, k3 = st.columns(3)
-                k1.metric("Total Investido", f"R$ {custo_total:,.2f}")
-                k2.metric("Patrimônio Atual", f"R$ {patrimonio:,.2f}")
+                k1.metric("Total Investido", formatar_real(custo_total))
+                k2.metric("Patrimônio Atual", formatar_real(patrimonio))
                 delta_perc = ((patrimonio/custo_total)-1)*100 if custo_total > 0 else 0
-                k3.metric("Lucro Projetado", f"R$ {patrimonio - custo_total:,.2f}", delta=f"{delta_perc:.1f}%")
+                k3.metric("Lucro Projetado", formatar_real(patrimonio - custo_total), delta=f"{delta_perc:.1f}%")
                 
                 st.divider()
-                st.dataframe(pd.DataFrame(view_data).style.format({"Custo": "R$ {:,.2f}", "CPM Pago": "R$ {:,.2f}", "Lucro (Hoje)": "R$ {:,.2f}"}).applymap(lambda x: 'color: green' if x > 0 else 'color: red', subset=['Lucro (Hoje)']), use_container_width=True)
+                
+                # TABELA COLORIDA
+                df_view = pd.DataFrame(view_data)
+                
+                # Função de estilo para colorir a coluna de lucro (que agora é texto)
+                def color_lucro(val):
+                    # Gambiarra segura: remove R$ e converte pra float pra saber a cor
+                    try:
+                        num = float(val.replace('R$', '').replace('.', '').replace(',', '.').strip())
+                        color = '#d4edda' if num > 0 else '#f8d7da' # Fundo verde ou vermelho claro
+                        return f'background-color: {color}; color: black; font-weight: bold;'
+                    except: return ''
+
+                st.dataframe(
+                    df_view.drop(columns=['val_lucro_raw']).style.applymap(color_lucro, subset=['Lucro (Hoje)']), 
+                    use_container_width=True
+                )
                 
                 rid = st.number_input("ID para remover", step=1)
-                if st.button("🗑️ Remover Lote"): remover_carteira(rid); st.rerun()
-            else: st.info("Sua carteira está vazia.")
+                if st.button("🗑️ Remover Lote"):
+                    remover_carteira(rid)
+                    st.rerun()
+            else:
+                st.info("Sua carteira está vazia.")
 
     # --- P2P ---
     elif menu == "Mercado P2P":
         st.header("📢 Radar P2P")
         if plano == "Admin":
             with st.form("p2p"):
-                st.markdown("### 👑 Inserir Oportunidade P2P (Admin)")
+                st.markdown("### 👑 Inserir Oferta (Admin)")
                 c1, c2 = st.columns(2)
-                g = c1.text_input("Grupo de Origem (Ex: Balcão Milhas)")
-                p = c2.selectbox("Programa", ["Latam", "Smiles", "Azul"])
-                val = st.number_input("Valor Ofertado (R$)", 15.0)
-                obs = st.text_input("Obs (Ex: Pagamento imediato)")
-                if st.form_submit_button("Publicar Oferta"):
-                    ok, msg = adicionar_p2p(g, p, val, obs)
+                g = c1.text_input("Grupo")
+                p = c2.selectbox("Prog", ["Latam", "Smiles", "Azul"])
+                val = st.number_input("Valor", 15.0)
+                obs = st.text_input("Obs")
+                if st.form_submit_button("PUBLICAR"):
+                    ok, msg = adicionar_p2p(g, p, "COMPRA", val, obs)
                     if ok: st.success("Salvo!"); time.sleep(0.5); st.rerun()
                     else: st.error(f"Erro: {msg}")
         else:
             if plano == "Free": mostrar_paywall(); st.stop()
-            else: st.info("ℹ️ Melhores ofertas de compra encontradas nos grupos.")
+            else: st.info("ℹ️ Dados verificados.")
 
         dfp = ler_p2p_todos()
-        if not dfp.empty: st.dataframe(dfp, use_container_width=True)
+        if not dfp.empty:
+            # Formata a coluna Valor
+            dfp['valor'] = dfp['valor'].apply(formatar_real)
+            st.dataframe(dfp, use_container_width=True)
 
     # --- PROMOÇÕES ---
     elif menu == "Promoções":
@@ -440,10 +414,6 @@ def sistema_logado():
                     if st.form_submit_button("SALVAR"):
                         if admin_atualizar_dados(int(u_dados['id']), n, u_dados['email'], u_dados['telefone'], p, s):
                             st.success("OK"); time.sleep(1); st.rerun()
-            with c2:
-                npw = st.text_input("Nova Senha")
-                if st.button("RESETAR SENHA") and len(npw)>3:
-                    admin_resetar_senha(int(u_dados['id']), npw); st.success("Senha alterada")
             st.dataframe(df_users)
 
 # MAIN
