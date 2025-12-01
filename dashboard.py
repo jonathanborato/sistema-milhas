@@ -4,8 +4,6 @@ import sqlite3
 import hashlib
 import time
 import re
-import asyncio
-import plotly.express as px
 from datetime import datetime
 
 # --- 1. CONFIGURAÇÃO INICIAL ---
@@ -21,10 +19,9 @@ LOGO_URL = "https://raw.githubusercontent.com/jonathanborato/sistema-milhas/main
 # --- 2. CONFIGURAÇÃO SUPABASE / AMBIENTE ---
 try:
     from supabase import create_client
-    from playwright.async_api import async_playwright
-    PLAYWRIGHT_AVAILABLE = True
+    SUPABASE_AVAILABLE = True
 except ImportError:
-    PLAYWRIGHT_AVAILABLE = False
+    SUPABASE_AVAILABLE = False
 
 def get_supabase():
     try:
@@ -38,11 +35,9 @@ def get_supabase():
 NOME_BANCO_LOCAL = "milhas.db"
 def conectar_local(): return sqlite3.connect(NOME_BANCO_LOCAL)
 
-# FUNÇÃO CORRIGIDA
 def iniciar_banco_local():
     con = conectar_local()
     cur = con.cursor()
-    # Criamos a tabela sem o erro de sintaxe 'PROTECTED'
     cur.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
     cur.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
     cur.execute('CREATE TABLE IF NOT EXISTS carteira (id INTEGER PRIMARY KEY AUTOINCREMENT, usuario_email TEXT, data_compra TEXT, programa TEXT, quantidade INTEGER, custo_total REAL, cpm_medio REAL)')
@@ -50,7 +45,7 @@ def iniciar_banco_local():
     cur.execute('CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, nome TEXT, senha_hash TEXT, data_cadastro TEXT)')
     con.commit(); con.close()
 
-# --- SEGURANÇA E UTILITÁRIOS ---
+# --- 4. FUNÇÕES DE UTILIDADE E VISUALIZAÇÃO ---
 def criar_hash(senha): return hashlib.sha256(senha.encode()).hexdigest()
 
 def validar_senha_forte(senha):
@@ -90,67 +85,7 @@ def criar_card_preco(titulo, valor, is_winner=False):
     </div>
     """
 
-# --- 4. FUNÇÕES DE DADOS (CRUD) ---
-def registrar_usuario(nome, email, senha, telefone):
-    valida, msg = validar_senha_forte(senha)
-    if not valida: return False, msg
-
-    sb = get_supabase()
-    if sb:
-        try:
-            res = sb.table("usuarios").select("*").eq("email", email).execute()
-            if len(res.data) > 0: return False, "E-mail já existe."
-            dados = {"email": email, "nome": nome, "senha_hash": criar_hash(senha), "telefone": telefone, "plano": "Free", "status": "Ativo"}
-            sb.table("usuarios").insert(dados).execute()
-            return True, "Conta criada! Faça login."
-        except Exception as e: return False, f"Erro: {e}"
-    
-    try:
-        con = conectar_local()
-        con.execute("INSERT INTO usuarios (email, nome, senha_hash) VALUES (?, ?, ?)", (email, nome, criar_hash(senha)))
-        con.commit(); con.close()
-        return True, "Criado Localmente"
-    except: return False, "Erro local."
-
-def autenticar_usuario(email, senha):
-    h = criar_hash(senha)
-    sb = get_supabase()
-    if sb:
-        try:
-            res = sb.table("usuarios").select("*").eq("email", email).eq("senha_hash", h).execute()
-            if len(res.data) > 0:
-                u = res.data[0]
-                return {"nome": u['nome'], "plano": u.get('plano', 'Free'), "email": email}
-        except: pass
-    
-    con = conectar_local()
-    res = con.execute("SELECT nome FROM usuarios WHERE email = ? AND senha_hash = ?", (email, h)).fetchone()
-    con.close()
-    if res: return {"nome": res[0], "plano": "Local", "email": email}
-    return None
-
-def admin_listar_todos():
-    sb = get_supabase()
-    if sb:
-        res = sb.table("usuarios").select("*").order("id", desc=True).execute()
-        return pd.DataFrame(res.data)
-    return pd.DataFrame()
-
-def admin_atualizar_dados(id_user, nome, email, telefone, plano, status):
-    sb = get_supabase()
-    if sb:
-        sb.table("usuarios").update({"nome": nome, "email": email, "telefone": telefone, "plano": plano, "status": status}).eq("id", id_user).execute()
-        return True
-    return False
-
-def admin_resetar_senha(id_user, nova_senha_texto):
-    sb = get_supabase()
-    if sb:
-        sb.table("usuarios").update({"senha_hash": criar_hash(nova_senha_texto)}).eq("id", id_user).execute()
-        return True
-    return False
-
-# --- 5. FUNÇÕES DE DADOS (RESTANTE) ---
+# --- 5. FUNÇÕES DE DADOS ---
 def ler_dados_historico():
     con = conectar_local()
     try:
@@ -203,56 +138,62 @@ def pegar_ultimo_p2p(programa):
     except: pass
     return 0.0
 
-def ler_p2p_todos():
+# --- FUNÇÕES DE ADMIN ---
+def registrar_usuario(nome, email, senha, telefone):
+    valida, msg = validar_senha_forte(senha)
+    if not valida: return False, msg
     sb = get_supabase()
-    if not sb: return pd.DataFrame()
+    if sb:
+        try:
+            res = sb.table("usuarios").select("id").eq("email", email).execute()
+            if len(res.data) > 0: return False, "E-mail já existe."
+            dados = {"email": email, "nome": nome, "senha_hash": criar_hash(senha), "telefone": telefone, "plano": "Free", "status": "Ativo"}
+            sb.table("usuarios").insert(dados).execute()
+            return True, "Conta criada! Faça login."
+        except Exception as e: return False, f"Erro: {e}"
     try:
-        res = sb.table("mercado_p2p").select("*").order("id", desc=True).limit(50).execute()
+        con = conectar_local()
+        con.execute("INSERT INTO usuarios (email, nome, senha_hash) VALUES (?, ?, ?)", (email, nome, criar_hash(senha)))
+        con.commit(); con.close()
+        return True, "Criado Localmente"
+    except: return False, "Erro local."
+
+def autenticar_usuario(email, senha):
+    h = criar_hash(senha)
+    sb = get_supabase()
+    if sb:
+        try:
+            res = sb.table("usuarios").select("*").eq("email", email).eq("senha_hash", h).execute()
+            if len(res.data) > 0:
+                u = res.data[0]
+                return {"nome": u['nome'], "plano": u.get('plano', 'Free'), "email": email}
+        except: pass
+    con = conectar_local()
+    res = con.execute("SELECT nome FROM usuarios WHERE email = ? AND senha_hash = ?", (email, h)).fetchone()
+    con.close()
+    if res: return {"nome": res[0], "plano": "Local", "email": email}
+    return None
+
+def admin_listar_todos():
+    sb = get_supabase()
+    if sb:
+        res = sb.table("usuarios").select("*").order("id", desc=True).execute()
         return pd.DataFrame(res.data)
-    except: return pd.DataFrame()
+    return pd.DataFrame()
 
-# --- ROBÔ DE COTAÇÃO (INTERNO) ---
-async def executar_cotacao_agora():
-    if not PLAYWRIGHT_AVAILABLE:
-        st.error("ERRO: Playwright não está pronto. Reinicie o App para instalar dependências.")
-        return False
+def admin_atualizar_dados(id_user, nome, email, telefone, plano, status):
+    sb = get_supabase()
+    if sb:
+        sb.table("usuarios").update({"nome": nome, "email": email, "telefone": telefone, "plano": plano, "status": status}).eq("id", id_user).execute()
+        return True
+    return False
 
-    SEU_EMAIL = "jonathanfborato@gmail.com"
-    PROGRAMAS = {"1": "Smiles", "2": "Latam", "3": "Azul"}
-    QTD_MILHAS = "100000"
-    
-    status_text = st.empty(); bar = st.progress(0)
-    
-    try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']); context = await browser.new_context(); page = await context.new_page()
-            steps = len(PROGRAMAS); current_step = 0
-            
-            for id_prog, nome_prog in PROGRAMAS.items():
-                status_text.text(f"🤖 Robô consultando: {nome_prog}..."); await page.goto("https://hotmilhas.com.br/", timeout=60000)
-                await page.get_by_role("textbox", name="Digite seu e-mail *").fill(SEU_EMAIL)
-                await page.get_by_role("combobox").select_option(id_prog)
-                campo_qtd = page.get_by_role("textbox", name="Quantidade de milhas *"); await campo_qtd.click(); await campo_qtd.fill(QTD_MILHAS)
-                try: await page.get_by_text("100.000", exact=True).click()
-                except: await page.keyboard.press("Enter")
-                await page.locator("#form").get_by_role("button", name="Cotar minhas milhas").click(force=True)
-                try: await page.wait_for_selector("text=R$", timeout=15000)
-                except: pass
-                texto = await page.locator("body").inner_text(); padrao = r"(?:em|Até)\s+(90)\s+dia[s]?.*?R\$\s?([\d\.,]+)"
-                match = re.search(padrao, texto, re.DOTALL | re.IGNORECASE)
-                
-                if match:
-                    valor_float = float(match.group(2).replace('.', '').replace(',', '.'))
-                    cpm = valor_float / 100
-                    con = conectar_local(); agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    con.execute('INSERT INTO historico (data_hora, email, prazo_dias, valor_total, cpm) VALUES (?, ?, ?, ?, ?)', (agora, nome_prog, 90, valor_float, cpm))
-                    con.commit(); con.close()
-                await context.clear_cookies(); current_step += 1
-                bar.progress(int((current_step / steps) * 100))
-            
-            await browser.close(); status_text.empty(); bar.empty(); return True
-    except Exception as e:
-        st.error(f"Erro ao iniciar robô: {e}"); return False
+def admin_resetar_senha(id_user, nova_senha_texto):
+    sb = get_supabase()
+    if sb:
+        sb.table("usuarios").update({"senha_hash": criar_hash(nova_senha_texto)}).eq("id", id_user).execute()
+        return True
+    return False
 
 # --- 7. INICIALIZAÇÃO E FLUXO ---
 iniciar_banco_local()
@@ -440,7 +381,7 @@ def sistema_logado():
             with st.form("p2p"):
                 st.markdown("### 👑 Inserir Oferta (Admin)")
                 c1, c2 = st.columns(2)
-                g = st.text_input("Grupo")
+                g = c1.text_input("Grupo")
                 p = c2.selectbox("Prog", ["Latam", "Smiles", "Azul"])
                 val = st.number_input("Valor", 15.0)
                 obs = st.text_input("Obs")
