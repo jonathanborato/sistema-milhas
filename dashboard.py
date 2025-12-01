@@ -16,126 +16,94 @@ st.set_page_config(
 
 LOGO_URL = "https://raw.githubusercontent.com/jonathanborato/sistema-milhas/main/logo.png"
 
-# --- 2. CONFIGURAÇÃO SUPABASE ---
+# --- 2. CONEXÃO NUVEM (SUPABASE) ---
 try:
     from supabase import create_client
     SUPABASE_AVAILABLE = True
 except ImportError:
     SUPABASE_AVAILABLE = False
 
+# Cache do cliente Supabase para não reconectar toda hora
+@st.cache_resource
 def get_supabase():
     if not SUPABASE_AVAILABLE: return None
     try:
         url = st.secrets["supabase"]["url"]
         key = st.secrets["supabase"]["key"]
         return create_client(url, key)
-    except: return None
+    except Exception as e:
+        return None
 
-# --- 3. BANCO LOCAL ---
+# --- 3. CONEXÃO LOCAL (ROBÔ) ---
 NOME_BANCO_LOCAL = "milhas.db"
-
 def conectar_local(): return sqlite3.connect(NOME_BANCO_LOCAL)
 
-def iniciar_banco():
-    con = conectar_local()
-    cur = con.cursor()
-    # Tabelas de Dados
-    cur.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
-    cur.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
-    cur.execute('CREATE TABLE IF NOT EXISTS carteira (id INTEGER PRIMARY KEY AUTOINCREMENT, usuario_email TEXT, data_compra TEXT, programa TEXT, quantidade INTEGER, custo_total REAL, cpm_medio REAL)')
-    cur.execute('CREATE TABLE IF NOT EXISTS mercado_p2p (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, grupo_nome TEXT, programa TEXT, tipo TEXT, valor REAL, observacao TEXT)')
-    
-    # --- CORREÇÃO DO ERRO AQUI: Tabela de Usuários Local (Backup) ---
-    cur.execute('CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, nome TEXT, senha_hash TEXT, data_cadastro TEXT)')
-    
-    con.commit(); con.close()
+# --- 4. FUNÇÕES DE DADOS ---
 
-def criar_hash(senha): return hashlib.sha256(senha.encode()).hexdigest()
-
-def validar_senha_forte(senha):
-    if len(senha) < 8: return False, "Mínimo 8 caracteres."
-    if not re.search(r"[a-z]", senha): return False, "Precisa de letra minúscula."
-    if not re.search(r"[A-Z]", senha): return False, "Precisa de letra maiúscula."
-    if not re.search(r"[0-9]", senha): return False, "Precisa de número."
-    if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", senha): return False, "Precisa de caractere especial (@#$)."
-    return True, ""
-
-# --- 4. FUNÇÕES DE USUÁRIO & ADMIN ---
-def registrar_usuario(nome, email, senha, telefone):
-    valida, msg = validar_senha_forte(senha)
-    if not valida: return False, msg
-
+# A) P2P (NUVEM OBRIGATÓRIA)
+def adicionar_p2p(g, p, t, v, o):
     sb = get_supabase()
-    if sb:
-        try:
-            res = sb.table("usuarios").select("*").eq("email", email).execute()
-            if len(res.data) > 0: return False, "E-mail já existe."
-            dados = {"email": email, "nome": nome, "senha_hash": criar_hash(senha), "telefone": telefone, "plano": "Free", "status": "Ativo"}
-            sb.table("usuarios").insert(dados).execute()
-            return True, "Conta criada! Faça login."
-        except Exception as e: return False, f"Erro Nuvem: {e}"
-    
+    if not sb: return False, "Erro de conexão com Supabase."
     try:
-        con = conectar_local()
-        con.execute("INSERT INTO usuarios (email, nome, senha_hash) VALUES (?, ?, ?)", (email, nome, criar_hash(senha)))
-        con.commit(); con.close()
-        return True, "Criado Localmente"
-    except: return False, "Erro local."
+        dados = {
+            "data_hora": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "grupo_nome": g, "programa": p, "tipo": t, "valor": float(v), "observacao": o
+        }
+        sb.table("mercado_p2p").insert(dados).execute()
+        return True, "Sucesso"
+    except Exception as e: return False, str(e)
 
-def autenticar_usuario(email, senha):
-    h = criar_hash(senha)
+def ler_p2p_todos():
     sb = get_supabase()
-    
-    # Tenta Nuvem
-    if sb:
-        try:
-            res = sb.table("usuarios").select("*").eq("email", email).eq("senha_hash", h).execute()
-            if len(res.data) > 0:
-                u = res.data[0]
-                return {"nome": u['nome'], "plano": u.get('plano', 'Free'), "email": email}
-        except: pass
-    
-    # Tenta Local (Fallback)
+    if not sb: return pd.DataFrame()
     try:
-        con = conectar_local()
-        res = con.execute("SELECT nome FROM usuarios WHERE email = ? AND senha_hash = ?", (email, h)).fetchone()
-        con.close()
-        if res: return {"nome": res[0], "plano": "Local", "email": email}
-    except:
-        pass
-        
-    return None
+        res = sb.table("mercado_p2p").select("*").order("id", desc=True).limit(50).execute()
+        return pd.DataFrame(res.data)
+    except: return pd.DataFrame()
 
-def admin_listar_todos():
+def pegar_ultimo_p2p(programa):
     sb = get_supabase()
-    if sb:
-        try:
-            res = sb.table("usuarios").select("*").order("id", desc=True).execute()
-            return pd.DataFrame(res.data)
+    if not sb: return 0.0
+    try:
+        res = sb.table("mercado_p2p").select("valor").ilike("programa", f"%{programa}%").eq("tipo", "COMPRA").order("valor", desc=True).limit(1).execute()
+        if len(res.data) > 0: return float(res.data[0]['valor'])
+    except: pass
+    return 0.0
+
+# B) CARTEIRA (NUVEM OBRIGATÓRIA)
+def adicionar_carteira(email, p, q, v):
+    sb = get_supabase()
+    if not sb: return False, "Erro de conexão com Supabase."
+    try:
+        cpm = float(v) / (float(q) / 1000) if float(q) > 0 else 0
+        dados = {
+            "usuario_email": email,
+            "data_compra": datetime.now().strftime("%Y-%m-%d"),
+            "programa": p,
+            "quantidade": int(q),
+            "custo_total": float(v),
+            "cpm_medio": cpm
+        }
+        sb.table("carteira").insert(dados).execute()
+        return True, "Sucesso"
+    except Exception as e: return False, str(e)
+
+def remover_carteira(id_item):
+    sb = get_supabase()
+    if sb: 
+        try: sb.table("carteira").delete().eq("id", id_item).execute()
         except: pass
-    return pd.DataFrame()
 
-def admin_atualizar_dados(id_user, nome, email, telefone, plano, status):
+def ler_carteira_usuario(email):
     sb = get_supabase()
-    if sb:
-        try:
-            dados = {"nome": nome, "email": email, "telefone": telefone, "plano": plano, "status": status}
-            sb.table("usuarios").update(dados).eq("id", id_user).execute()
-            return True
-        except: return False
-    return False
+    if not sb: return pd.DataFrame()
+    try:
+        res = sb.table("carteira").select("*").eq("usuario_email", email).execute()
+        return pd.DataFrame(res.data)
+    except: return pd.DataFrame()
 
-def admin_resetar_senha(id_user, nova_senha_texto):
-    sb = get_supabase()
-    if sb:
-        try:
-            nh = criar_hash(nova_senha_texto)
-            sb.table("usuarios").update({"senha_hash": nh}).eq("id", id_user).execute()
-            return True
-        except: return False
-    return False
-
-# --- 5. FUNÇÕES DE DADOS ---
+# C) HISTÓRICO ROBÔ (LOCAL)
+@st.cache_data(ttl=60)
 def ler_dados_historico():
     con = conectar_local()
     try:
@@ -146,55 +114,55 @@ def ler_dados_historico():
     con.close()
     return df
 
-def ler_carteira_usuario(email):
+# D) USUÁRIOS (NUVEM)
+def registrar_usuario(nome, email, senha, telefone):
+    sb = get_supabase()
+    if not sb: return False, "Sem conexão com banco."
+    try:
+        # Check duplicidade
+        res = sb.table("usuarios").select("id").eq("email", email).execute()
+        if len(res.data) > 0: return False, "E-mail já cadastrado."
+        
+        # Insere
+        dados = {"email": email, "nome": nome, "senha_hash": hashlib.sha256(senha.encode()).hexdigest(), "telefone": telefone, "plano": "Free", "status": "Ativo"}
+        sb.table("usuarios").insert(dados).execute()
+        return True, "Conta criada!"
+    except Exception as e: return False, f"Erro técnico: {e}"
+
+def autenticar_usuario(email, senha):
+    sb = get_supabase()
+    if not sb: return None
+    try:
+        h = hashlib.sha256(senha.encode()).hexdigest()
+        res = sb.table("usuarios").select("*").eq("email", email).eq("senha_hash", h).execute()
+        if len(res.data) > 0:
+            u = res.data[0]
+            return {"nome": u['nome'], "plano": u.get('plano', 'Free'), "email": email}
+    except: pass
+    return None
+
+def admin_listar_todos():
     sb = get_supabase()
     if sb:
-        res = sb.table("carteira").select("*").eq("usuario_email", email).execute()
+        res = sb.table("usuarios").select("*").order("id", desc=True).execute()
         return pd.DataFrame(res.data)
     return pd.DataFrame()
 
-def adicionar_carteira(email, p, q, v):
+def admin_atualizar_dados(id_user, nome, email, telefone, plano, status):
     sb = get_supabase()
     if sb:
-        cpm = v/(q/1000) if q>0 else 0
-        dados = {"usuario_email": email, "data_compra": datetime.now().strftime("%Y-%m-%d"), "programa": p, "quantidade": q, "custo_total": v, "cpm_medio": cpm}
-        sb.table("carteira").insert(dados).execute()
+        sb.table("usuarios").update({"nome": nome, "email": email, "telefone": telefone, "plano": plano, "status": status}).eq("id", id_user).execute()
+        return True
+    return False
 
-def remover_carteira(id_item):
-    sb = get_supabase()
-    if sb: sb.table("carteira").delete().eq("id", id_item).execute()
-
-def adicionar_p2p(g, p, t, v, o):
-    sb = get_supabase()
-    if sb:
-        dados = {"data_hora": datetime.now().strftime("%Y-%m-%d %H:%M"), "grupo_nome": g, "programa": p, "tipo": t, "valor": v, "observacao": o}
-        sb.table("mercado_p2p").insert(dados).execute()
-
-def pegar_ultimo_p2p(programa):
-    sb = get_supabase()
-    if sb:
-        res = sb.table("mercado_p2p").select("valor").ilike("programa", f"%{programa}%").eq("tipo", "COMPRA").order("valor", desc=True).limit(1).execute()
-        if len(res.data) > 0: return float(res.data[0]['valor'])
-    return 0.0
-
-def ler_p2p_todos():
-    sb = get_supabase()
-    if sb:
-        res = sb.table("mercado_p2p").select("*").order("id", desc=True).limit(50).execute()
-        return pd.DataFrame(res.data)
-    return pd.DataFrame()
-
-# --- INICIALIZA ---
-iniciar_banco()
-
-# --- ESTILIZAÇÃO CSS ---
+# --- CSS ---
 st.markdown("""
 <style>
     .block-container {padding-top: 4rem !important; padding-bottom: 2rem !important;}
-    div.stButton > button {width: 100%; background-color: #0E436B; color: white; border: none; padding: 10px; border-radius: 5px; font-weight: bold;}
+    div.stButton > button {width: 100%; background-color: #0E436B; color: white; border-radius: 5px; font-weight: bold;}
     div.stButton > button:hover {background-color: #082d4a; color: white;}
     div[data-testid="stImage"] {display: flex; justify-content: center; align-items: center; width: 100%;}
-    .metric-card {background: #f0f2f6; padding: 15px; border-radius: 8px; box-shadow: 2px 2px 5px rgba(0,0,0,0.1);}
+    .metric-card {background: #f0f2f6; padding: 15px; border-radius: 8px;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -226,17 +194,16 @@ def tela_login():
                 user = autenticar_usuario(email, senha)
                 if user:
                     st.session_state['user'] = user
-                    st.success(f"Olá, {user['nome']}!"); time.sleep(0.5); st.rerun()
+                    st.success("Login OK!"); time.sleep(0.5); st.rerun()
                 else: st.error("Acesso negado.")
         
         with tab2:
-            st.info("Requisitos: Mínimo 8 caracteres, Maiúscula, Minúscula, Número e Especial.")
             nome = st.text_input("Nome", key="cad_nome")
-            mail = st.text_input("E-mail", key="cad_mail")
+            email_c = st.text_input("E-mail", key="cad_mail")
             whats = st.text_input("WhatsApp", key="cad_whats")
             pw = st.text_input("Senha", type="password", key="cad_pw")
             if st.button("CADASTRAR", key="btn_cad"):
-                ok, msg = registrar_usuario(nome, mail, pw, whats)
+                ok, msg = registrar_usuario(nome, email_c, pw, whats)
                 if ok: st.success(msg)
                 else: st.error(msg)
 
@@ -247,15 +214,22 @@ def sistema_logado():
     user = st.session_state['user']
     plano = user['plano']
     
+    # STATUS DA CONEXÃO
+    sb_status = "🟢 Online" if get_supabase() else "🔴 Offline"
+    
     opcoes = ["Dashboard (Mercado)", "Minha Carteira", "Mercado P2P", "Promoções"]
     if plano == "Admin": opcoes.append("👑 Gestão de Usuários")
 
     with st.sidebar:
         st.markdown(f"""<div style="display: flex; justify-content: center; margin-bottom: 15px;"><img src="{LOGO_URL}" style="width: 200px; max-width: 100%;"></div>""", unsafe_allow_html=True)
         st.markdown(f"<div style='text-align: center; margin-top: -10px;'>Olá, <b>{user['nome'].split()[0]}</b></div>", unsafe_allow_html=True)
+        
+        st.caption(f"Nuvem: {sb_status}")
+        
         if plano == "Admin": st.success("👑 ADMIN")
         elif plano == "Pro": st.success("⭐ PRO")
         else: st.info("🔹 FREE")
+        
         st.divider()
         menu = st.radio("Menu", opcoes)
         st.divider()
@@ -270,18 +244,14 @@ def sistema_logado():
             cols = st.columns(3)
             for i, p in enumerate(["Latam", "Smiles", "Azul"]):
                 d = df_cotacoes[df_cotacoes['programa'].str.contains(p, case=False, na=False)]
-                val_hot = 0.0
-                if not d.empty: val_hot = d.iloc[-1]['cpm']
-                valor_p2p = pegar_ultimo_p2p(p)
+                val_hot = d.iloc[-1]['cpm'] if not d.empty else 0.0
+                val_p2p = pegar_ultimo_p2p(p)
                 
                 with cols[i]:
                     st.markdown(f"### {p}")
                     mc1, mc2 = st.columns(2)
                     with mc1: st.metric("🤖 Hotmilhas", f"R$ {val_hot:.2f}" if val_hot > 0 else "--")
-                    with mc2:
-                        delta = 0.0
-                        if val_hot > 0 and valor_p2p > 0: delta = valor_p2p - val_hot
-                        st.metric("👥 P2P", f"R$ {valor_p2p:.2f}" if valor_p2p > 0 else "--", delta=f"{delta:.2f}" if valor_p2p > 0 else None)
+                    with mc2: st.metric("👥 P2P", f"R$ {val_p2p:.2f}" if val_p2p > 0 else "--")
                     st.divider()
                     if not d.empty: st.line_chart(d, x="data_hora", y="cpm", height=200)
         else: st.warning("Aguardando robô.")
@@ -291,40 +261,99 @@ def sistema_logado():
         st.header("💼 Carteira")
         if plano == "Free": mostrar_paywall()
         else:
-            with st.expander("➕ Adicionar"):
-                c1, c2, c3 = st.columns(3)
-                p = c1.selectbox("Programa", ["Latam Pass", "Smiles", "Azul", "Livelo"])
-                q = c2.number_input("Qtd", 1000, step=1000)
-                v = c3.number_input("R$ Total", 0.0, step=10.0)
-                if st.button("SALVAR"): adicionar_carteira(user['email'], p, q, v); st.rerun()
+            # FORMULÁRIO DE ADIÇÃO
+            with st.expander("➕ Adicionar Lote", expanded=True):
+                with st.form("add_carteira"):
+                    c1, c2, c3 = st.columns(3)
+                    p = c1.selectbox("Programa", ["Latam Pass", "Smiles", "Azul", "Livelo"])
+                    q = c2.number_input("Qtd", 1000, step=1000)
+                    v = c3.number_input("R$ Total Pago", 0.0, step=10.0)
+                    if st.form_submit_button("💾 Salvar Lote"):
+                        ok, msg = adicionar_carteira(user['email'], p, q, v)
+                        if ok: st.success("Salvo!"); time.sleep(0.5); st.rerun()
+                        else: st.error(f"Erro ao salvar: {msg}")
+            
+            # VISUALIZAÇÃO
             dfc = ler_carteira_usuario(user['email'])
             if not dfc.empty:
-                st.dataframe(dfc)
-                rid = st.number_input("ID Remover", step=1)
-                if st.button("REMOVER"): remover_carteira(rid); st.rerun()
-            else: st.info("Vazia.")
+                patrimonio = 0
+                custo_total = 0
+                view_data = []
+                
+                for _, row in dfc.iterrows():
+                    prog_nome = row['programa'].split()[0]
+                    # Busca Cotações
+                    val_hot = 0.0
+                    if not df_cotacoes.empty:
+                        f = df_cotacoes[df_cotacoes['programa'].str.contains(prog_nome, case=False, na=False)]
+                        if not f.empty: val_hot = f.iloc[-1]['cpm']
+                    
+                    val_p2p = pegar_ultimo_p2p(prog_nome)
+                    
+                    # Lógica de Valuation
+                    melhor_preco = max(val_hot, val_p2p)
+                    
+                    qtd = float(row['quantidade'])
+                    custo = float(row['custo_total'])
+                    
+                    val_venda = (qtd / 1000) * melhor_preco
+                    lucro = val_venda - custo
+                    
+                    patrimonio += val_venda
+                    custo_total += custo
+                    
+                    view_data.append({
+                        "ID": row['id'],
+                        "Programa": row['programa'],
+                        "Qtd": f"{qtd:,.0f}",
+                        "Custo": f"R$ {custo:.2f}",
+                        "CPM Médio": f"R$ {row['cpm_medio']:.2f}",
+                        "Melhor Cotação": f"R$ {melhor_preco:.2f}",
+                        "Lucro (Hoje)": lucro
+                    })
+                
+                # KPIs
+                k1, k2, k3 = st.columns(3)
+                k1.metric("Total Investido", f"R$ {custo_total:,.2f}")
+                k2.metric("Patrimônio Atual", f"R$ {patrimonio:,.2f}")
+                k3.metric("Lucro Estimado", f"R$ {patrimonio - custo_total:,.2f}", 
+                          delta=f"{((patrimonio/custo_total)-1)*100:.1f}%" if custo_total > 0 else 0)
+                
+                st.divider()
+                st.dataframe(pd.DataFrame(view_data).style.applymap(lambda x: 'color: green' if x > 0 else 'color: red', subset=['Lucro (Hoje)']), use_container_width=True)
+                
+                # REMOÇÃO
+                rid = st.number_input("ID para remover", step=1)
+                if st.button("🗑️ Remover Lote"):
+                    remover_carteira(rid)
+                    st.rerun()
+            else:
+                st.info("Sua carteira está vazia.")
 
     # --- P2P ---
     elif menu == "Mercado P2P":
         st.header("📢 Radar P2P")
         if plano == "Admin":
             with st.form("p2p"):
-                st.markdown("### 👑 Inserir Oferta (Admin)")
+                st.markdown("### 👑 Inserir Oferta")
                 c1, c2 = st.columns(2)
                 g = c1.text_input("Grupo")
                 p = c2.selectbox("Prog", ["Latam", "Smiles", "Azul"])
                 t = st.radio("Tipo", ["VENDA", "COMPRA"])
                 val = st.number_input("Valor", 15.0)
                 obs = st.text_input("Obs")
-                if st.form_submit_button("PUBLICAR"):
-                    adicionar_p2p(g, p, t, val, obs); st.success("Salvo!"); time.sleep(0.5); st.rerun()
+                if st.form_submit_button("Publicar"):
+                    ok, msg = adicionar_p2p(g, p, "COMPRA" if "COMPRA" in t else "VENDA", val, obs)
+                    if ok: st.success("Salvo!"); time.sleep(0.5); st.rerun()
+                    else: st.error(f"Erro: {msg}")
         else:
             if plano == "Free": mostrar_paywall(); st.stop()
             else: st.info("ℹ️ Dados verificados.")
+
         dfp = ler_p2p_todos()
         if not dfp.empty: st.dataframe(dfp, use_container_width=True)
 
-    # --- PROMOÇÕES ---
+    # --- PROMOS ---
     elif menu == "Promoções":
         st.header("🔥 Radar")
         if plano == "Free": mostrar_paywall()
@@ -353,10 +382,6 @@ def sistema_logado():
                     if st.form_submit_button("SALVAR"):
                         if admin_atualizar_dados(int(u_dados['id']), n, u_dados['email'], u_dados['telefone'], p, s):
                             st.success("OK"); time.sleep(1); st.rerun()
-            with c2:
-                npw = st.text_input("Nova Senha")
-                if st.button("RESETAR SENHA") and len(npw)>3:
-                    admin_resetar_senha(int(u_dados['id']), npw); st.success("Senha alterada")
             st.dataframe(df_users)
 
 # MAIN
