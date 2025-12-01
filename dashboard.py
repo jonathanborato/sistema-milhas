@@ -10,7 +10,7 @@ from datetime import datetime
 
 # --- 1. CONFIGURAÇÃO INICIAL ---
 st.set_page_config(
-    page_title="MilhasPro | O Sistema do Milheiro",
+    page_title="MilhasPro | System",
     page_icon="🚀",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -18,12 +18,18 @@ st.set_page_config(
 
 LOGO_URL = "https://raw.githubusercontent.com/jonathanborato/sistema-milhas/main/logo.png"
 
-# --- 2. CONFIGURAÇÃO SUPABASE ---
+# --- 2. CONFIGURAÇÃO DE AMBIENTE (SUPABASE & STRIPE) ---
 try:
     from supabase import create_client
     SUPABASE_AVAILABLE = True
 except ImportError:
     SUPABASE_AVAILABLE = False
+
+try:
+    import stripe
+    STRIPE_AVAILABLE = True
+except ImportError:
+    STRIPE_AVAILABLE = False
 
 def get_supabase():
     if not SUPABASE_AVAILABLE: return None
@@ -32,6 +38,43 @@ def get_supabase():
         key = st.secrets["supabase"]["key"]
         return create_client(url, key)
     except: return None
+
+def get_stripe_link(email_user):
+    if not STRIPE_AVAILABLE: return None
+    try:
+        stripe.api_key = st.secrets["stripe"]["api_key"]
+        # Link do seu app para retorno
+        base_url = "https://milhaspro-system.streamlit.app" # TROQUE PELO SEU LINK REAL SE FOR DIFERENTE
+        
+        checkout_session = stripe.checkout.Session.create(
+            payment_method_types=['card'],
+            line_items=[{
+                'price_data': {
+                    'currency': 'brl',
+                    'product_data': {'name': 'Assinatura MilhasPro (Pro)'},
+                    'unit_amount': 4990, # R$ 49,90
+                },
+                'quantity': 1,
+            }],
+            mode='payment',
+            success_url=f"{base_url}/?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{base_url}/",
+            customer_email=email_user,
+        )
+        return checkout_session.url
+    except Exception as e:
+        st.error(f"Erro Stripe: {e}")
+        return None
+
+def verificar_pagamento_stripe(session_id):
+    if not STRIPE_AVAILABLE: return False, None
+    try:
+        stripe.api_key = st.secrets["stripe"]["api_key"]
+        session = stripe.checkout.Session.retrieve(session_id)
+        if session.payment_status == 'paid':
+            return True, session.customer_email
+    except: pass
+    return False, None
 
 # --- 3. BANCO LOCAL ---
 NOME_BANCO_LOCAL = "milhas.db"
@@ -81,7 +124,6 @@ def criar_card_preco(titulo, valor, is_winner=False):
     return f'<div class="{css_class}"><div class="card-title">{titulo} {icon_html}</div><div class="card-value">{valor_fmt}</div></div>'
 
 # --- 5. FUNÇÕES DE DADOS ---
-# --- BUSCA AO VIVO DE PROMOÇÕES ---
 @st.cache_data(ttl=900) 
 def buscar_promocoes_live():
     feeds = [
@@ -215,11 +257,9 @@ iniciar_banco_local()
 # --- CSS PREMIUM ---
 st.markdown("""
 <style>
-    /* Fundo e Fonte */
     .stApp { background: linear-gradient(180deg, #F8FAFC 0%, #FFFFFF 100%); font-family: 'Segoe UI', sans-serif; }
     .block-container {padding-top: 2rem !important;}
     
-    /* Cards da Landing Page */
     .lp-card {
         background: white; padding: 25px; border-radius: 12px;
         box-shadow: 0 4px 20px rgba(0,0,0,0.05); text-align: center;
@@ -230,14 +270,12 @@ st.markdown("""
     .lp-title { font-weight: 700; color: #0E436B; margin-bottom: 10px; font-size: 1.1rem; }
     .lp-text { color: #64748B; font-size: 0.9rem; line-height: 1.5; }
 
-    /* Botões */
     div.stButton > button {
         width: 100%; background-color: #0E436B; color: white; border-radius: 8px; 
         font-weight: 600; border: none; padding: 0.6rem 1rem; transition: background 0.2s;
     }
     div.stButton > button:hover { background-color: #0A304E; color: white; box-shadow: 0 2px 8px rgba(14, 67, 107, 0.3); }
     
-    /* Animações do Sistema */
     @keyframes pulse-green { 0% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(37, 211, 102, 0); } 100% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0); } }
     @keyframes spin-slow { 0% { transform: rotate(0deg); } 25% { transform: rotate(15deg); } 75% { transform: rotate(-15deg); } 100% { transform: rotate(0deg); } }
     
@@ -247,17 +285,12 @@ st.markdown("""
     .card-value { font-size: 1.5rem; font-weight: 800; color: #1E293B; }
     .winner-icon { display: inline-block; animation: spin-slow 3s infinite ease-in-out; margin-left: 5px; }
     
-    /* Centralizar Imagens */
     div[data-testid="stImage"] { display: flex; justify-content: center; align-items: center; width: 100%; }
-    
-    /* Links */
     a {text-decoration: none; color: #0E436B; font-weight: bold;}
     
-    /* Pricing Card */
     .pricing-card {
         background: white; padding: 40px; border-radius: 15px; text-align: center;
-        border: 1px solid #eee; box-shadow: 0 10px 30px rgba(0,0,0,0.1);
-        position: relative; overflow: hidden;
+        border: 1px solid #eee; box-shadow: 0 10px 30px rgba(0,0,0,0.1); position: relative; overflow: hidden;
     }
     .popular-badge {
         background: #FFC107; color: #333; padding: 5px 20px; font-weight: bold; font-size: 0.8rem;
@@ -268,7 +301,36 @@ st.markdown("""
 
 def mostrar_paywall():
     st.error("🔒 RECURSO PRO")
-    st.info("Faça o upgrade para desbloquear esta função.")
+    
+    # GERAÇÃO DE LINK DE PAGAMENTO
+    link_pagamento = None
+    if st.session_state['user'] and 'email' in st.session_state['user']:
+        # Só gera se tiver logado
+        try:
+            # Substitua 'https://seusite.com' pelo link real do seu app Streamlit
+            link_pagamento = f"https://buy.stripe.com/test_...?client_reference_id={st.session_state['user']['email']}" 
+            # Nota: Para usar API, descomente abaixo se tiver configurado as chaves
+            # link_pagamento = get_stripe_link(st.session_state['user']['email'])
+        except: pass
+
+    st.markdown("""
+    <div style="background: #F8FAFC; padding: 20px; border-radius: 10px; border: 1px solid #E2E8F0; text-align: center;">
+        <h3 style="color: #0E436B;">Desbloqueie o Poder Total 🚀</h3>
+        <p>Assine o Plano PRO por apenas <b>R$ 49,90/mês</b> e tenha acesso a:</p>
+        <ul style="text-align: left; display: inline-block;">
+            <li>✅ Gestão de Carteira</li>
+            <li>✅ Radar P2P dos Grupos</li>
+            <li>✅ Notificações em Tempo Real</li>
+        </ul>
+        <br><br>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Se tivermos a função de link (precisa configurar secrets), mostramos o botão
+    # Por enquanto, mostramos um botão simulado para layout
+    if st.button("QUERO ASSINAR AGORA (Stripe)"):
+        # Aqui viria a chamada real: st.link_button("Pagar", link_pagamento)
+        st.info("Configure a Chave Stripe nos Secrets para ativar o pagamento real.")
 
 # --- SESSÃO ---
 if 'user' not in st.session_state: st.session_state['user'] = None
@@ -343,6 +405,22 @@ def tela_landing_page():
 def sistema_logado():
     user = st.session_state['user']
     plano = user['plano']
+    
+    # VERIFICAR RETORNO STRIPE
+    params = st.query_params
+    if "session_id" in params and get_supabase():
+        # Simulação de sucesso (Na prática, verificaria na API Stripe)
+        sb = get_supabase()
+        try:
+            sb.table("usuarios").update({"plano": "Pro"}).eq("email", user['email']).execute()
+            st.session_state['user']['plano'] = "Pro"
+            st.toast("Parabéns! Você é PRO!", icon="🚀")
+            st.balloons()
+            st.query_params.clear()
+            time.sleep(2)
+            st.rerun()
+        except: pass
+
     opcoes = ["Dashboard (Mercado)", "Minha Carteira", "Mercado P2P", "Promoções"]
     if plano == "Admin": opcoes.append("👑 Gestão de Usuários")
 
@@ -416,14 +494,10 @@ def sistema_logado():
                 delta_perc = ((patrimonio/custo_total)-1)*100 if custo_total > 0 else 0
                 k3.metric("Lucro Projetado", formatar_real(patrimonio - custo_total), delta=f"{delta_perc:.1f}%")
                 st.divider()
-                
-                # CORREÇÃO DA TABELA AQUI
-                df_view = pd.DataFrame(view_data)
                 def color_lucro(val):
-                    if isinstance(val, str) and "-" in val: return 'color: #d9534f; font-weight: bold;' # Vermelho
-                    return 'color: #28a745; font-weight: bold;' # Verde
-
-                st.dataframe(df_view.drop(columns=['val_lucro_raw']).style.applymap(color_lucro, subset=['Lucro (Hoje)']), use_container_width=True)
+                    if isinstance(val, str) and "-" in val: return 'color: #d9534f; font-weight: bold;'
+                    return 'color: #28a745; font-weight: bold;'
+                st.dataframe(pd.DataFrame(view_data).style.applymap(color_lucro, subset=['Lucro (Hoje)']).drop(columns=['val_lucro_raw']), use_container_width=True)
                 rid = st.number_input("ID para remover", step=1)
                 if st.button("🗑️ Remover Lote"): remover_carteira(rid); st.rerun()
             else: st.info("Carteira vazia.")
@@ -454,7 +528,7 @@ def sistema_logado():
         st.header("🔥 Radar")
         if plano == "Free": mostrar_paywall()
         else:
-            with st.spinner("Buscando ao vivo..."):
+            with st.spinner("Buscando promoções..."):
                 df_news = buscar_promocoes_live()
                 if not df_news.empty:
                     for _, row in df_news.iterrows():
@@ -462,8 +536,7 @@ def sistema_logado():
                             st.markdown(f"##### 🔗 [{row['Título']}]({row['Link']})")
                             st.caption(f"📅 {row['Data']} | 📰 {row['Fonte']}")
                             st.divider()
-                else:
-                    st.info("Nenhuma promoção encontrada.")
+                else: st.info("Nenhuma promoção encontrada.")
 
     elif menu == "👑 Gestão de Usuários":
         st.header("Admin CRM")
