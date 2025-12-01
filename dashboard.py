@@ -5,7 +5,7 @@ import hashlib
 import time
 import re
 import asyncio
-import subprocess # NECESSÁRIO PARA INSTALAR O NAVEGADOR
+import subprocess # Para rodar comandos de sistema (instalar navegador)
 import sys
 from datetime import datetime
 import plotly.express as px
@@ -20,32 +20,14 @@ st.set_page_config(
 
 LOGO_URL = "https://raw.githubusercontent.com/jonathanborato/sistema-milhas/main/logo.png"
 
-# --- 2. CORREÇÃO DO PLAYWRIGHT NA NUVEM (NOVO!) ---
-# Isso garante que o navegador seja baixado no servidor do Streamlit
-@st.cache_resource
-def instalar_navegadores():
-    try:
-        # Roda o comando 'playwright install chromium' no terminal do servidor
-        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"])
-    except Exception as e:
-        print(f"Erro ao instalar navegador: {e}")
-
-instalar_navegadores() # Executa a instalação ao abrir o app
-
-# --- CONFIGURAÇÃO SUPABASE ---
+# --- 2. CONFIGURAÇÃO SUPABASE / PLAYWRIGHT ENVS ---
 try:
     from supabase import create_client
-    SUPABASE_AVAILABLE = True
-except ImportError:
-    SUPABASE_AVAILABLE = False
-
-# --- CONFIGURAÇÃO PLAYWRIGHT IMPORT ---
-try:
     from playwright.async_api import async_playwright
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
-
+    
 def get_supabase():
     if not SUPABASE_AVAILABLE: return None
     try:
@@ -54,12 +36,27 @@ def get_supabase():
         return create_client(url, key)
     except: return None
 
+# --- INSTALADOR DE NAVEGADOR (FIX FINAL) ---
+@st.cache_resource
+def instalar_navegadores():
+    # Roda o comando 'playwright install-deps' para instalar bibliotecas do Linux (libnss3, etc.)
+    print("Iniciando instalação de dependências de sistema...")
+    subprocess.run([sys.executable, "-m", "playwright", "install-deps"])
+    # Roda o comando 'playwright install chromium' para baixar o binário
+    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"])
+    print("Instalação concluída!")
+
+# Chamada ao iniciar o app
+if PLAYWRIGHT_AVAILABLE:
+    instalar_navegadores()
+
 # --- 3. BANCO LOCAL ---
 NOME_BANCO_LOCAL = "milhas.db"
 def conectar_local(): return sqlite3.connect(NOME_BANCO_LOCAL)
 
 def iniciar_banco_local():
     con = conectar_local()
+    cur = con.cursor()
     con.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
     con.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
     con.commit(); con.close()
@@ -69,6 +66,10 @@ def criar_hash(senha): return hashlib.sha256(senha.encode()).hexdigest()
 
 def validar_senha_forte(senha):
     if len(senha) < 8: return False, "Mínimo 8 caracteres."
+    if not re.search(r"[a-z]", senha): return False, "Precisa de letra minúscula."
+    if not re.search(r"[A-Z]", senha): return False, "Precisa de letra maiúscula."
+    if not re.search(r"[0-9]", senha): return False, "Precisa de número."
+    if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", senha): return False, "Precisa de caractere especial (@#$)."
     return True, ""
 
 def formatar_real(valor):
@@ -85,14 +86,7 @@ def plotar_grafico(df, programa):
     
     fig = px.area(df, x="data_hora", y="cpm", markers=True)
     fig.update_traces(line_color=cor, fillcolor=cor, marker=dict(size=6, color="white", line=dict(width=2, color=cor)))
-    fig.update_layout(
-        height=250, 
-        margin=dict(l=0, r=0, t=10, b=0),
-        xaxis_title=None, yaxis_title=None,
-        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        yaxis=dict(showgrid=True, gridcolor='#f0f0f0'), xaxis=dict(showgrid=False),
-        showlegend=False
-    )
+    fig.update_layout(height=250, margin=dict(l=0, r=0, t=10, b=0), xaxis_title=None, yaxis_title=None, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", yaxis=dict(showgrid=True, gridcolor='#f0f0f0'), xaxis=dict(showgrid=False), showlegend=False)
     return fig
 
 def criar_card_preco(titulo, valor, is_winner=False):
@@ -122,7 +116,7 @@ async def executar_cotacao_agora():
     
     try:
         async with async_playwright() as p:
-            # Argumentos essenciais para rodar no Linux do servidor
+            # Lançamento em modo HEADLESS para servidor CI/CD
             browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'])
             context = await browser.new_context()
             page = await context.new_page()
@@ -132,6 +126,7 @@ async def executar_cotacao_agora():
             
             for id_prog, nome_prog in PROGRAMAS.items():
                 status_text.text(f"🤖 Robô consultando: {nome_prog}...")
+                
                 try:
                     await page.goto("https://hotmilhas.com.br/", timeout=60000)
                     await page.get_by_role("textbox", name="Digite seu e-mail *").fill(SEU_EMAIL)
@@ -157,13 +152,14 @@ async def executar_cotacao_agora():
                         valor_float = float(match.group(2).replace('.', '').replace(',', '.'))
                         cpm = valor_float / 100
                         
+                        # Salva no Banco Local
                         con = conectar_local()
                         agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         con.execute('INSERT INTO historico (data_hora, email, prazo_dias, valor_total, cpm) VALUES (?, ?, ?, ?, ?)', (agora, nome_prog, 90, valor_float, cpm))
                         con.commit(); con.close()
                         
                 except Exception as e:
-                    print(f"Erro {nome_prog}: {e}")
+                    print(f"Erro ao cotar {nome_prog}: {e}")
                 
                 await context.clear_cookies()
                 current_step += 1
@@ -178,7 +174,8 @@ async def executar_cotacao_agora():
         st.error(f"Erro ao iniciar robô: {e}")
         return False
 
-# --- 5. FUNÇÕES DE DADOS ---
+
+# --- FUNÇÕES DE DADOS (DIVERSAS) ---
 
 def adicionar_p2p(g, p, t, v, o):
     sb = get_supabase()
@@ -230,6 +227,7 @@ def ler_carteira_usuario(email):
         return pd.DataFrame(res.data)
     except: return pd.DataFrame()
 
+# Historico
 @st.cache_data(ttl=60)
 def ler_dados_historico():
     con = conectar_local()
@@ -241,13 +239,14 @@ def ler_dados_historico():
     con.close()
     return df
 
+# Usuários e Admin
 def registrar_usuario(nome, email, senha, telefone):
     sb = get_supabase()
     if not sb: return False, "Sem conexão."
     try:
         res = sb.table("usuarios").select("id").eq("email", email).execute()
         if len(res.data) > 0: return False, "E-mail já cadastrado."
-        dados = {"email": email, "nome": nome, "senha_hash": hashlib.sha256(senha.encode()).hexdigest(), "telefone": telefone, "plano": "Free", "status": "Ativo"}
+        dados = {"email": email, "nome": nome, "senha_hash": criar_hash(senha), "telefone": telefone, "plano": "Free", "status": "Ativo"}
         sb.table("usuarios").insert(dados).execute()
         return True, "Conta criada!"
     except Exception as e: return False, f"Erro: {e}"
@@ -256,7 +255,7 @@ def autenticar_usuario(email, senha):
     sb = get_supabase()
     if not sb: return None
     try:
-        h = hashlib.sha256(senha.encode()).hexdigest()
+        h = criar_hash(senha)
         res = sb.table("usuarios").select("*").eq("email", email).eq("senha_hash", h).execute()
         if len(res.data) > 0:
             u = res.data[0]
@@ -288,7 +287,7 @@ def admin_resetar_senha(id_user, nova_senha_texto):
 # --- INICIALIZA ---
 iniciar_banco_local()
 
-# --- CSS E ANIMAÇÕES ---
+# --- CSS ---
 st.markdown("""
 <style>
     .block-container {padding-top: 4rem !important; padding-bottom: 2rem !important;}
@@ -335,7 +334,7 @@ def tela_login():
                 user = autenticar_usuario(email, senha)
                 if user:
                     st.session_state['user'] = user
-                    st.success("Login OK!"); time.sleep(0.5); st.rerun()
+                    st.success(f"Olá, {user['nome']}!"); time.sleep(0.5); st.rerun()
                 else: st.error("Acesso negado.")
         
         with tab2:
@@ -377,21 +376,23 @@ def sistema_logado():
 
     # --- DASHBOARD ---
     if menu == "Dashboard (Mercado)":
-        # Layout: Título na Esquerda | Botão na Direita
         col_title, col_btn = st.columns([3, 1])
         with col_title:
             st.header("📊 Visão de Mercado")
         with col_btn:
-            if st.button("🔄 Atualizar Cotações"):
-                with st.spinner("Robô consultando Hotmilhas... (Isso leva ~40s)"):
-                    sucesso = asyncio.run(executar_cotacao_agora())
-                    if sucesso:
-                        st.success("Atualizado!")
-                        st.cache_data.clear()
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.error("Erro no robô.")
+            if st.button("🔄 Atualizar Agora"):
+                if not PLAYWRIGHT_AVAILABLE:
+                    st.error("ERRO: Playwright não está pronto. Reinstale as dependências.")
+                else:
+                    with st.spinner("Robô consultando Hotmilhas... (Aguarde 40s)"):
+                        sucesso = asyncio.run(executar_cotacao_agora())
+                        if sucesso:
+                            st.success("Atualizado!")
+                            st.cache_data.clear()
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error("Erro ao rodar robô.")
 
         if not df_cotacoes.empty:
             cols = st.columns(3)
@@ -400,7 +401,6 @@ def sistema_logado():
                 val_hot = d.iloc[-1]['cpm'] if not d.empty else 0.0
                 val_p2p = pegar_ultimo_p2p(p)
                 
-                # Lógica de quem ganha
                 hot_wins = val_hot > val_p2p and val_hot > 0
                 p2p_wins = val_p2p > val_hot and val_p2p > 0
                 
@@ -434,6 +434,7 @@ def sistema_logado():
                 patrimonio = 0
                 custo_total = 0
                 view_data = []
+                
                 for _, row in dfc.iterrows():
                     prog_nome = row['programa'].split()[0]
                     val_hot = 0.0
@@ -448,6 +449,7 @@ def sistema_logado():
                     qtd = float(row['quantidade'])
                     custo = float(row['custo_total'])
                     cpm_pago = float(row['cpm_medio'])
+                    
                     val_venda = (qtd / 1000) * melhor_preco
                     lucro = val_venda - custo
                     patrimonio += val_venda
@@ -466,7 +468,7 @@ def sistema_logado():
                 
                 rid = st.number_input("ID para remover", step=1)
                 if st.button("🗑️ Remover Lote"): remover_carteira(rid); st.rerun()
-            else: st.info("Sua carteira está vazia.")
+            else: st.info("Carteira vazia.")
 
     # --- P2P ---
     elif menu == "Mercado P2P":
