@@ -13,7 +13,7 @@ st.set_page_config(
     page_title="MilhasPro | System",
     page_icon="🚀",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
 LOGO_URL = "https://raw.githubusercontent.com/jonathanborato/sistema-milhas/main/logo.png"
@@ -81,62 +81,6 @@ def criar_card_preco(titulo, valor, is_winner=False):
     return f'<div class="{css_class}"><div class="card-title">{titulo} {icon_html}</div><div class="card-value">{valor_fmt}</div></div>'
 
 # --- 5. FUNÇÕES DE DADOS ---
-
-@st.cache_data(ttl=900) 
-def buscar_promocoes_live():
-    feeds = [
-        {"url": "https://passageirodeprimeira.com/feed/", "fonte": "Passageiro de Primeira"},
-        {"url": "https://pontospravoar.com/feed/", "fonte": "Pontos pra Voar"},
-        {"url": "https://www.melhoresdestinos.com.br/feed", "fonte": "Melhores Destinos"}
-    ]
-    
-    news = []
-    titulos_vistos = set() # Para evitar duplicatas exatas
-    
-    for f in feeds:
-        try:
-            d = feedparser.parse(f['url'])
-            for e in d.entries[:10]:
-                titulo_clean = e.title.strip()
-                t_lower = titulo_clean.lower()
-                
-                # IDENTIFICAÇÃO RIGOROSA DO PROGRAMA
-                programa_detectado = None
-                cor_tag = "#999"
-                
-                if "smiles" in t_lower: 
-                    programa_detectado = "SMILES"
-                    cor_tag = "#FF7000"
-                elif "latam" in t_lower: 
-                    programa_detectado = "LATAM"
-                    cor_tag = "#E30613"
-                elif "azul" in t_lower or "tudoazul" in t_lower: 
-                    programa_detectado = "AZUL"
-                    cor_tag = "#00AEEF"
-                elif "livelo" in t_lower: 
-                    programa_detectado = "LIVELO"
-                    cor_tag = "#E91E63"
-                elif "esfera" in t_lower: 
-                    programa_detectado = "ESFERA"
-                    cor_tag = "#D32F2F"
-                
-                # Só adiciona se for de um programa relevante E não for duplicado
-                if programa_detectado and titulo_clean not in titulos_vistos:
-                    titulos_vistos.add(titulo_clean)
-                    
-                    data_pub = e.get('published', 'Hoje')[:16]
-                    news.append({
-                        "Data": data_pub, 
-                        "Título": titulo_clean, 
-                        "Fonte": f['fonte'], 
-                        "Link": e.link,
-                        "Programa": programa_detectado,
-                        "Cor": cor_tag
-                    })
-        except: pass
-        
-    return pd.DataFrame(news)
-
 def adicionar_p2p(g, p, t, v, o):
     sb = get_supabase()
     if not sb: return False, "Erro de conexão."
@@ -198,6 +142,25 @@ def ler_dados_historico():
     con.close()
     return df
 
+@st.cache_data(ttl=900) 
+def buscar_promocoes_live():
+    feeds = [
+        {"url": "https://passageirodeprimeira.com/feed/", "fonte": "Passageiro de Primeira"},
+        {"url": "https://pontospravoar.com/feed/", "fonte": "Pontos pra Voar"},
+        {"url": "https://www.melhoresdestinos.com.br/feed", "fonte": "Melhores Destinos"}
+    ]
+    keywords = ["bônus", "transferência", "compra", "livelo", "esfera", "latam", "smiles", "azul"]
+    news = []
+    for f in feeds:
+        try:
+            d = feedparser.parse(f['url'])
+            for e in d.entries[:8]:
+                if any(k in e.title.lower() for k in keywords):
+                    data_pub = e.get('published', 'Hoje')[:16]
+                    news.append({"Data": data_pub, "Título": e.title, "Fonte": f['fonte'], "Link": e.link})
+        except: pass
+    return pd.DataFrame(news)
+
 def registrar_usuario(nome, email, senha, telefone):
     valida, msg = validar_senha_forte(senha)
     if not valida: return False, msg
@@ -245,21 +208,19 @@ def admin_resetar_senha(id_user, nova_senha_texto):
         return True
     return False
 
-# --- CÉREBRO DO ROBÔ DE PASSAGENS ---
 def calcular_decisao_emissao(programa, milhas_necessarias, preco_dinheiro, df_historico):
-    # 1. Valor de Mercado (Venda)
     val_mercado = 0.0
     if not df_historico.empty:
         d = df_historico[df_historico['programa'].str.contains(programa.split()[0], case=False, na=False)]
         if not d.empty: val_mercado = d.iloc[-1]['cpm']
     if val_mercado == 0: val_mercado = pegar_ultimo_p2p(programa.split()[0])
-    if val_mercado == 0: val_mercado = 20.00 # Fallback padrão
+    if val_mercado == 0: val_mercado = 20.00 # Fallback
     
     valor_milhas_em_reais = (milhas_necessarias / 1000) * val_mercado
     
     if valor_milhas_em_reais < preco_dinheiro:
         economia = preco_dinheiro - valor_milhas_em_reais
-        return {"decisao": "MILHAS", "economia": economia, "custo_milhas": valor_milhas_em_reais, "msg": f"✅ Use milhas! Elas valem R$ {valor_milhas_em_reais:.2f} no mercado."}
+        return {"decisao": "MILHAS", "economia": economia, "custo_milhas": valor_milhas_em_reais, "msg": f"✅ Use milhas! Elas valem R$ {valor_milhas_em_reais:.2f}."}
     else:
         prejuizo = valor_milhas_em_reais - preco_dinheiro
         return {"decisao": "DINHEIRO", "economia": prejuizo, "custo_milhas": valor_milhas_em_reais, "msg": f"🛑 Pague em dinheiro! Suas milhas valem R$ {valor_milhas_em_reais:.2f}."}
@@ -273,43 +234,51 @@ st.markdown("""
     .stApp { background: linear-gradient(180deg, #F8FAFC 0%, #FFFFFF 100%); font-family: 'Segoe UI', sans-serif; }
     .block-container {padding-top: 2rem !important;}
     
-    /* Cards */
-    .lp-card { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); text-align: center; height: 100%; border: 1px solid #EEF2F6; transition: transform 0.3s ease; }
+    /* Cards da Landing Page */
+    .lp-card {
+        background: white; padding: 25px; border-radius: 12px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.05); text-align: center;
+        height: 100%; border: 1px solid #EEF2F6; transition: transform 0.3s ease;
+    }
     .lp-card:hover { transform: translateY(-5px); box-shadow: 0 8px 25px rgba(14, 67, 107, 0.15); border-color: #0E436B; }
     .lp-icon { font-size: 2.5rem; margin-bottom: 15px; display: block; }
     .lp-title { font-weight: 700; color: #0E436B; margin-bottom: 10px; font-size: 1.1rem; }
     .lp-text { color: #64748B; font-size: 0.9rem; line-height: 1.5; }
-    
+
     /* Botões */
-    div.stButton > button { width: 100%; background-color: #0E436B; color: white; border-radius: 8px; font-weight: 600; border: none; padding: 0.6rem 1rem; transition: background 0.2s; }
+    div.stButton > button {
+        width: 100%; background-color: #0E436B; color: white; border-radius: 8px; 
+        font-weight: 600; border: none; padding: 0.6rem 1rem; transition: background 0.2s;
+    }
     div.stButton > button:hover { background-color: #0A304E; color: white; box-shadow: 0 2px 8px rgba(14, 67, 107, 0.3); }
     
-    /* Animações */
+    /* Animações do Sistema */
     @keyframes pulse-green { 0% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(37, 211, 102, 0); } 100% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0); } }
+    @keyframes spin-slow { 0% { transform: rotate(0deg); } 25% { transform: rotate(15deg); } 75% { transform: rotate(-15deg); } 100% { transform: rotate(0deg); } }
+    
     .price-card { background: white; padding: 15px; border-radius: 10px; border: 1px solid #E2E8F0; text-align: center; margin-bottom: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
     .winner-pulse { border: 2px solid #25d366 !important; background: #F0FDF4 !important; animation: pulse-green 2s infinite; color: #0E436B; }
     .card-title { font-size: 0.85rem; color: #64748B; margin-bottom: 5px; font-weight: 600; }
     .card-value { font-size: 1.5rem; font-weight: 800; color: #1E293B; }
-    .winner-icon { display: inline-block; margin-left: 5px; }
+    .winner-icon { display: inline-block; animation: spin-slow 3s infinite ease-in-out; margin-left: 5px; }
     
-    /* Promo Card */
-    .promo-card { border-radius: 8px; padding: 12px; margin-bottom: 10px; background: white; box-shadow: 0 2px 5px rgba(0,0,0,0.05); transition: transform 0.2s; }
-    .promo-card:hover { transform: translateX(5px); }
-    .promo-tag { color: white; padding: 3px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; display: inline-block; margin-bottom: 5px; }
-    .promo-link { text-decoration: none; color: #333; font-weight: 600; font-size: 1rem; }
-    .promo-link:hover { color: #0E436B; }
-    .promo-meta { font-size: 0.8rem; color: #888; margin-top: 5px; }
-
-    /* Pricing Card */
-    .pricing-card { background: white; padding: 40px; border-radius: 15px; text-align: center; border: 1px solid #eee; box-shadow: 0 10px 30px rgba(0,0,0,0.1); position: relative; overflow: hidden; }
-    .popular-badge { background: #FFC107; color: #333; padding: 5px 20px; font-weight: bold; font-size: 0.8rem; position: absolute; top: 20px; right: -30px; transform: rotate(45deg); width: 120px; }
-    
-    /* Resultados Robô */
-    .robo-box-green { background: linear-gradient(135deg, #d4fc79 0%, #96e6a1 100%); color: #155724; padding: 20px; border-radius: 10px; text-align: center; border: 2px solid #28a745; margin-top: 15px; }
-    .robo-box-red { background: linear-gradient(135deg, #ff9a9e 0%, #fecfef 99%, #fecfef 100%); color: #721c24; padding: 20px; border-radius: 10px; text-align: center; border: 2px solid #dc3545; margin-top: 15px; }
-    
-    /* Centralizar Imagens */
     div[data-testid="stImage"] { display: flex; justify-content: center; align-items: center; width: 100%; }
+    a {text-decoration: none; color: #0E436B; font-weight: bold;}
+    
+    /* Pricing Card */
+    .pricing-card {
+        background: white; padding: 40px; border-radius: 15px; text-align: center;
+        border: 1px solid #eee; box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        position: relative; overflow: hidden;
+    }
+    .popular-badge {
+        background: #FFC107; color: #333; padding: 5px 20px; font-weight: bold; font-size: 0.8rem;
+        position: absolute; top: 20px; right: -30px; transform: rotate(45deg); width: 120px;
+    }
+    
+    /* Robô Resultado */
+    .robo-box-green { background: linear-gradient(135deg, #d4fc79 0%, #96e6a1 100%); color: #155724; padding: 25px; border-radius: 15px; text-align: center; margin-top: 20px; border: 2px solid #28a745; box-shadow: 0 5px 15px rgba(40, 167, 69, 0.3); }
+    .robo-box-red { background: linear-gradient(135deg, #ff9a9e 0%, #fecfef 99%, #fecfef 100%); color: #721c24; padding: 25px; border-radius: 15px; text-align: center; margin-top: 20px; border: 2px solid #dc3545; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -362,7 +331,6 @@ def tela_landing_page():
                     if ok: st.success("Sucesso! Faça login."); st.balloons()
                     else: st.error(msg)
         st.markdown("</div>", unsafe_allow_html=True)
-
     st.markdown("---")
     col_f1, col_f2, col_f3 = st.columns(3)
     with col_f1: st.markdown("""<div class="lp-card"><span class="lp-icon">🤖</span><div class="lp-title">Automação Inteligente</div><div class="lp-text">Nosso robô monitora a Hotmilhas todo dia e salva o histórico.</div></div>""", unsafe_allow_html=True)
@@ -392,6 +360,7 @@ def tela_landing_page():
 def sistema_logado():
     user = st.session_state['user']
     plano = user['plano']
+    
     opcoes = ["Dashboard (Mercado)", "✈️ Robô de Passagens (Beta)", "Minha Carteira", "Mercado P2P", "Promoções"]
     if plano == "Admin": opcoes.append("👑 Gestão de Usuários")
 
@@ -427,6 +396,7 @@ def sistema_logado():
                     if not d.empty: st.plotly_chart(plotar_grafico(d, p), use_container_width=True)
         else: st.warning("Aguardando robô.")
 
+    # --- ROBÔ DE PASSAGENS ---
     elif menu == "✈️ Robô de Passagens (Beta)":
         st.header("✈️ Calculadora Inteligente de Emissão")
         st.info("Descubra se vale a pena emitir com milhas ou pagar em dinheiro.")
@@ -437,6 +407,7 @@ def sistema_logado():
                 prog_destino = c1.selectbox("Programa de Fidelidade", ["Smiles", "Latam Pass", "TudoAzul"])
                 milhas = c2.number_input("Valor em Milhas (Total)", min_value=1000, step=1000, value=50000)
                 valor_dinheiro = st.number_input("Preço da Passagem em Dinheiro (R$)", min_value=100.0, step=50.0, value=2500.0)
+                
                 if st.form_submit_button("🤖 CALCULAR DECISÃO"):
                     with st.spinner("Analisando custo de oportunidade..."):
                         time.sleep(1)
@@ -458,7 +429,8 @@ def sistema_logado():
                     q = c2.number_input("Qtd", 1000, step=1000)
                     cpm = c3.number_input("CPM Pago (R$)", 0.0, 100.0, 35.0)
                     if st.form_submit_button("💾 Salvar Lote"):
-                        ok, msg = adicionar_carteira(user['email'], p, q, (q/1000)*cpm)
+                        total = (q/1000)*cpm
+                        ok, msg = adicionar_carteira(user['email'], p, q, total)
                         if ok: st.success("Salvo!"); time.sleep(0.5); st.rerun()
                         else: st.error(f"Erro: {msg}")
             dfc = ler_carteira_usuario(user['email'])
@@ -486,9 +458,9 @@ def sistema_logado():
                 k3.metric("Lucro Projetado", formatar_real(patrimonio - custo_total), delta=f"{delta_perc:.1f}%")
                 st.divider()
                 def color_lucro(val):
-                    if isinstance(val, str) and "-" in val: return 'color: #d9534f; font-weight: bold;'
-                    return 'color: #28a745; font-weight: bold;'
-                st.dataframe(pd.DataFrame(view_data).style.applymap(color_lucro, subset=['Lucro (Hoje)']).drop(columns=['val_lucro_raw']), use_container_width=True)
+                    if isinstance(val, str) and "-" in val: return 'color: #d9534f; font-weight: bold;' # Vermelho
+                    return 'color: #28a745; font-weight: bold;' # Verde
+                st.dataframe(pd.DataFrame(view_data).drop(columns=['val_lucro_raw']).style.applymap(color_lucro, subset=['Lucro (Hoje)']), use_container_width=True)
                 rid = st.number_input("ID para remover", step=1)
                 if st.button("🗑️ Remover Lote"): remover_carteira(rid); st.rerun()
             else: st.info("Carteira vazia.")
@@ -523,14 +495,10 @@ def sistema_logado():
                 df_news = buscar_promocoes_live()
                 if not df_news.empty:
                     for _, row in df_news.iterrows():
-                        st.markdown(f"""
-                        <div class="promo-card" style="border-left: 5px solid {row['Cor']};">
-                            <span class="promo-tag" style="background-color: {row['Cor']};">{row['Programa']}</span>
-                            <br>
-                            <a href="{row['Link']}" target="_blank" class="promo-link">{row['Título']}</a>
-                            <div class="promo-meta">📅 {row['Data']} | 📰 {row['Fonte']}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
+                        with st.container():
+                            st.markdown(f"##### 🔗 [{row['Título']}]({row['Link']})")
+                            st.caption(f"📅 {row['Data']} | 📰 {row['Fonte']}")
+                            st.divider()
                 else: st.info("Nenhuma promoção encontrada.")
 
     elif menu == "👑 Gestão de Usuários":
