@@ -10,10 +10,10 @@ from datetime import datetime
 
 # --- 1. CONFIGURAÇÃO INICIAL ---
 st.set_page_config(
-    page_title="MilhasPro | System",
+    page_title="MilhasPro | P2P Edition",
     page_icon="🚀",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
 
 LOGO_URL = "https://raw.githubusercontent.com/jonathanborato/sistema-milhas/main/logo.png"
@@ -33,18 +33,14 @@ def get_supabase():
         return create_client(url, key)
     except: return None
 
-# --- 3. BANCO LOCAL ---
-NOME_BANCO_LOCAL = "milhas.db"
+# --- 3. BANCO LOCAL (APENAS PARA CACHE DE NOTÍCIAS RSS) ---
+# Removemos o histórico de cotações local, pois agora tudo vem da nuvem P2P
+NOME_BANCO_LOCAL = "milhas_cache.db"
 def conectar_local(): return sqlite3.connect(NOME_BANCO_LOCAL)
 
 def iniciar_banco_local():
-    con = conectar_local()
-    con.execute('CREATE TABLE IF NOT EXISTS historico (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, email TEXT, prazo_dias INTEGER, valor_total REAL, cpm REAL)')
-    con.execute('CREATE TABLE IF NOT EXISTS promocoes (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, titulo TEXT, link TEXT, origem TEXT)')
-    con.execute('CREATE TABLE IF NOT EXISTS carteira (id INTEGER PRIMARY KEY AUTOINCREMENT, usuario_email TEXT, data_compra TEXT, programa TEXT, quantidade INTEGER, custo_total REAL, cpm_medio REAL)')
-    con.execute('CREATE TABLE IF NOT EXISTS mercado_p2p (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT, grupo_nome TEXT, programa TEXT, tipo TEXT, valor REAL, observacao TEXT)')
-    con.execute('CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, nome TEXT, senha_hash TEXT, data_cadastro TEXT)')
-    con.commit(); con.close()
+    # Mantemos apenas tabelas auxiliares locais se necessário
+    pass 
 
 # --- 4. UTILITÁRIOS ---
 def criar_hash(senha): return hashlib.sha256(senha.encode()).hexdigest()
@@ -61,31 +57,61 @@ def formatar_real(valor):
         return f"R$ {s}"
     except: return "R$ 0,00"
 
-def plotar_grafico(df, programa):
-    cor = "#0E436B"
-    if "Latam" in programa: cor = "#E30613"
-    elif "Smiles" in programa: cor = "#FF7000"
-    elif "Azul" in programa: cor = "#00AEEF"
-    
-    if df.empty: return None
-    
-    fig = px.area(df, x="data_hora", y="cpm", markers=True)
-    fig.update_traces(line_color=cor, fillcolor=cor, marker=dict(size=6, color="white", line=dict(width=2, color=cor)))
-    fig.update_layout(height=250, margin=dict(l=0, r=0, t=10, b=0), xaxis_title=None, yaxis_title=None, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", yaxis=dict(showgrid=True, gridcolor='#f0f0f0'), xaxis=dict(showgrid=False), showlegend=False)
-    return fig
+def criar_card_destaque(titulo, valor, subtitulo, cor="blue"):
+    cores = {
+        "blue": "border-left: 5px solid #0E436B; background-color: #F0F8FF;",
+        "green": "border-left: 5px solid #28a745; background-color: #F0FFF4;",
+        "red": "border-left: 5px solid #dc3545; background-color: #FFF5F5;",
+    }
+    estilo = cores.get(cor, cores["blue"])
+    return f"""
+    <div style="{estilo} padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 10px;">
+        <div style="font-size: 0.85rem; color: #666; font-weight: 600; text-transform: uppercase;">{titulo}</div>
+        <div style="font-size: 1.6rem; font-weight: 800; color: #333; margin: 5px 0;">{valor}</div>
+        <div style="font-size: 0.8rem; color: #888;">{subtitulo}</div>
+    </div>
+    """
 
-def criar_card_preco(titulo, valor, is_winner=False):
-    valor_fmt = formatar_real(valor) if valor > 0 else "--"
-    css_class = "price-card winner-pulse" if is_winner and valor > 0 else "price-card"
-    icon_html = '<span class="winner-icon">🏆</span>' if is_winner and valor > 0 else ""
-    return f'<div class="{css_class}"><div class="card-title">{titulo} {icon_html}</div><div class="card-value">{valor_fmt}</div></div>'
+# --- 5. FUNÇÕES DE DADOS (SUPABASE CENTRAL) ---
 
-# --- 5. FUNÇÕES DE DADOS ---
-def adicionar_p2p(g, p, t, v, o):
+# A) LEITURA DE PREÇO P2P (O NOVO CORAÇÃO DO SISTEMA)
+def pegar_preco_p2p_atual(programa):
+    """Busca o preço mais recente de COMPRA registrado no P2P"""
     sb = get_supabase()
-    if not sb: return False, "Erro de conexão."
+    if not sb: return 0.0
     try:
-        dados = {"data_hora": datetime.now().strftime("%Y-%m-%d %H:%M"), "grupo_nome": g, "programa": p, "tipo": "COMPRA", "valor": float(v), "observacao": o}
+        # Pega o ultimo registro
+        res = sb.table("mercado_p2p").select("valor").ilike("programa", f"%{programa}%").order("id", desc=True).limit(1).execute()
+        if len(res.data) > 0: return float(res.data[0]['valor'])
+    except: pass
+    
+    # Fallback se não tiver dados (Preço base conservador)
+    defaults = {"Latam": 27.00, "Smiles": 17.50, "Azul": 21.00, "Livelo": 35.00, "Esfera": 35.00}
+    return defaults.get(programa.split()[0], 0.0)
+
+def ler_historico_p2p(programa):
+    """Busca histórico de preços P2P para gráfico"""
+    sb = get_supabase()
+    if not sb: return pd.DataFrame()
+    try:
+        res = sb.table("mercado_p2p").select("data_hora, valor").ilike("programa", f"%{programa}%").order("data_hora", desc=False).execute()
+        df = pd.DataFrame(res.data)
+        if not df.empty:
+            # Converte string de data para datetime para ordenar corretamente no gráfico
+            df['data_hora'] = pd.to_datetime(df['data_hora'], format="%Y-%m-%d %H:%M", errors='coerce')
+        return df
+    except: return pd.DataFrame()
+
+# B) CRUD P2P
+def adicionar_p2p(g, p, v, o):
+    sb = get_supabase()
+    if not sb: return False, "Erro conexão"
+    try:
+        dados = {
+            "data_hora": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "grupo_nome": g, "programa": p, "tipo": "COMPRA", # Assumimos que é oferta de compra do mercado
+            "valor": float(v), "observacao": o
+        }
         sb.table("mercado_p2p").insert(dados).execute()
         return True, "Sucesso"
     except Exception as e: return False, str(e)
@@ -98,20 +124,12 @@ def ler_p2p_todos():
         return pd.DataFrame(res.data)
     except: return pd.DataFrame()
 
-def pegar_ultimo_p2p(programa):
-    sb = get_supabase()
-    if not sb: return 0.0
-    try:
-        res = sb.table("mercado_p2p").select("valor").ilike("programa", f"%{programa}%").order("id", desc=True).limit(1).execute()
-        if len(res.data) > 0: return float(res.data[0]['valor'])
-    except: pass
-    return 0.0
-
+# C) CARTEIRA
 def adicionar_carteira(email, p, q, v):
     sb = get_supabase()
-    if not sb: return False, "Erro conexão."
+    if not sb: return False, "Erro conexão"
     try:
-        cpm = float(v) / (float(q) / 1000) if float(q) > 0 else 0
+        cpm = float(v)/(float(q)/1000) if float(q)>0 else 0
         dados = {"usuario_email": email, "data_compra": datetime.now().strftime("%Y-%m-%d"), "programa": p, "quantidade": int(q), "custo_total": float(v), "cpm_medio": cpm}
         sb.table("carteira").insert(dados).execute()
         return True, "Sucesso"
@@ -119,9 +137,7 @@ def adicionar_carteira(email, p, q, v):
 
 def remover_carteira(id_item):
     sb = get_supabase()
-    if sb: 
-        try: sb.table("carteira").delete().eq("id", id_item).execute()
-        except: pass
+    if sb: sb.table("carteira").delete().eq("id", id_item).execute()
 
 def ler_carteira_usuario(email):
     sb = get_supabase()
@@ -131,17 +147,7 @@ def ler_carteira_usuario(email):
         return pd.DataFrame(res.data)
     except: return pd.DataFrame()
 
-@st.cache_data(ttl=60)
-def ler_dados_historico():
-    con = conectar_local()
-    try:
-        df = pd.read_sql_query("SELECT * FROM historico ORDER BY data_hora ASC", con)
-        if 'email' in df.columns: df = df.rename(columns={'email': 'programa'})
-        if not df.empty: df['data_hora'] = pd.to_datetime(df['data_hora'], errors='coerce')
-    except: df = pd.DataFrame()
-    con.close()
-    return df
-
+# D) NOTÍCIAS
 @st.cache_data(ttl=900) 
 def buscar_promocoes_live():
     feeds = [
@@ -154,13 +160,14 @@ def buscar_promocoes_live():
     for f in feeds:
         try:
             d = feedparser.parse(f['url'])
-            for e in d.entries[:8]:
+            for e in d.entries[:6]:
                 if any(k in e.title.lower() for k in keywords):
                     data_pub = e.get('published', 'Hoje')[:16]
                     news.append({"Data": data_pub, "Título": e.title, "Fonte": f['fonte'], "Link": e.link})
         except: pass
     return pd.DataFrame(news)
 
+# E) USUÁRIOS
 def registrar_usuario(nome, email, senha, telefone):
     valida, msg = validar_senha_forte(senha)
     if not valida: return False, msg
@@ -189,9 +196,7 @@ def autenticar_usuario(email, senha):
 
 def admin_listar_todos():
     sb = get_supabase()
-    if sb:
-        res = sb.table("usuarios").select("*").order("id", desc=True).execute()
-        return pd.DataFrame(res.data)
+    if sb: return pd.DataFrame(sb.table("usuarios").select("*").order("id", desc=True).execute().data)
     return pd.DataFrame()
 
 def admin_atualizar_dados(id_user, nome, email, telefone, plano, status):
@@ -208,135 +213,58 @@ def admin_resetar_senha(id_user, nova_senha_texto):
         return True
     return False
 
-def calcular_decisao_emissao(programa, milhas_necessarias, preco_dinheiro, df_historico):
-    val_mercado = 0.0
-    if not df_historico.empty:
-        d = df_historico[df_historico['programa'].str.contains(programa.split()[0], case=False, na=False)]
-        if not d.empty: val_mercado = d.iloc[-1]['cpm']
-    if val_mercado == 0: val_mercado = pegar_ultimo_p2p(programa.split()[0])
-    if val_mercado == 0: val_mercado = 20.00 # Fallback
-    
-    valor_milhas_em_reais = (milhas_necessarias / 1000) * val_mercado
-    
-    if valor_milhas_em_reais < preco_dinheiro:
-        economia = preco_dinheiro - valor_milhas_em_reais
-        return {"decisao": "MILHAS", "economia": economia, "custo_milhas": valor_milhas_em_reais, "msg": f"✅ Use milhas! Elas valem R$ {valor_milhas_em_reais:.2f}."}
-    else:
-        prejuizo = valor_milhas_em_reais - preco_dinheiro
-        return {"decisao": "DINHEIRO", "economia": prejuizo, "custo_milhas": valor_milhas_em_reais, "msg": f"🛑 Pague em dinheiro! Suas milhas valem R$ {valor_milhas_em_reais:.2f}."}
-
 # --- INICIALIZAÇÃO ---
 iniciar_banco_local()
 
-# --- CSS PREMIUM ---
+# --- CSS ---
 st.markdown("""
 <style>
-    .stApp { background: linear-gradient(180deg, #F8FAFC 0%, #FFFFFF 100%); font-family: 'Segoe UI', sans-serif; }
-    .block-container {padding-top: 2rem !important;}
-    
-    /* Cards da Landing Page */
-    .lp-card {
-        background: white; padding: 25px; border-radius: 12px;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.05); text-align: center;
-        height: 100%; border: 1px solid #EEF2F6; transition: transform 0.3s ease;
-    }
-    .lp-card:hover { transform: translateY(-5px); box-shadow: 0 8px 25px rgba(14, 67, 107, 0.15); border-color: #0E436B; }
-    .lp-icon { font-size: 2.5rem; margin-bottom: 15px; display: block; }
-    .lp-title { font-weight: 700; color: #0E436B; margin-bottom: 10px; font-size: 1.1rem; }
-    .lp-text { color: #64748B; font-size: 0.9rem; line-height: 1.5; }
-
-    /* Botões */
-    div.stButton > button {
-        width: 100%; background-color: #0E436B; color: white; border-radius: 8px; 
-        font-weight: 600; border: none; padding: 0.6rem 1rem; transition: background 0.2s;
-    }
-    div.stButton > button:hover { background-color: #0A304E; color: white; box-shadow: 0 2px 8px rgba(14, 67, 107, 0.3); }
-    
-    /* Animações do Sistema */
-    @keyframes pulse-green { 0% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(37, 211, 102, 0); } 100% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0); } }
-    @keyframes spin-slow { 0% { transform: rotate(0deg); } 25% { transform: rotate(15deg); } 75% { transform: rotate(-15deg); } 100% { transform: rotate(0deg); } }
-    
-    .price-card { background: white; padding: 15px; border-radius: 10px; border: 1px solid #E2E8F0; text-align: center; margin-bottom: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
-    .winner-pulse { border: 2px solid #25d366 !important; background: #F0FDF4 !important; animation: pulse-green 2s infinite; color: #0E436B; }
-    .card-title { font-size: 0.85rem; color: #64748B; margin-bottom: 5px; font-weight: 600; }
-    .card-value { font-size: 1.5rem; font-weight: 800; color: #1E293B; }
-    .winner-icon { display: inline-block; animation: spin-slow 3s infinite ease-in-out; margin-left: 5px; }
-    
-    div[data-testid="stImage"] { display: flex; justify-content: center; align-items: center; width: 100%; }
+    .block-container {padding-top: 4rem !important; padding-bottom: 2rem !important;}
+    div.stButton > button {width: 100%; background-color: #0E436B; color: white; border-radius: 5px; font-weight: bold;}
+    div.stButton > button:hover {background-color: #082d4a; color: white;}
+    div[data-testid="stImage"] {display: flex; justify-content: center; align-items: center; width: 100%;}
     a {text-decoration: none; color: #0E436B; font-weight: bold;}
     
-    /* Pricing Card */
-    .pricing-card {
-        background: white; padding: 40px; border-radius: 15px; text-align: center;
-        border: 1px solid #eee; box-shadow: 0 10px 30px rgba(0,0,0,0.1);
-        position: relative; overflow: hidden;
-    }
-    .popular-badge {
-        background: #FFC107; color: #333; padding: 5px 20px; font-weight: bold; font-size: 0.8rem;
-        position: absolute; top: 20px; right: -30px; transform: rotate(45deg); width: 120px;
-    }
-    
-    /* Robô Resultado */
-    .robo-box-green { background: linear-gradient(135deg, #d4fc79 0%, #96e6a1 100%); color: #155724; padding: 25px; border-radius: 15px; text-align: center; margin-top: 20px; border: 2px solid #28a745; box-shadow: 0 5px 15px rgba(40, 167, 69, 0.3); }
-    .robo-box-red { background: linear-gradient(135deg, #ff9a9e 0%, #fecfef 99%, #fecfef 100%); color: #721c24; padding: 25px; border-radius: 15px; text-align: center; margin-top: 20px; border: 2px solid #dc3545; }
+    /* Cards */
+    .lp-card { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); text-align: center; height: 100%; border: 1px solid #EEF2F6; }
+    .pricing-card { background: white; padding: 40px; border-radius: 15px; text-align: center; border: 1px solid #eee; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
+    .popular-badge { background: #FFC107; color: #333; padding: 5px 20px; font-weight: bold; font-size: 0.8rem; position: absolute; top: 20px; right: -30px; transform: rotate(45deg); width: 120px; }
 </style>
 """, unsafe_allow_html=True)
 
 def mostrar_paywall():
     st.error("🔒 RECURSO PRO")
-    st.info("Faça o upgrade para desbloquear esta função.")
+    st.info("Faça o upgrade para acessar.")
 
-# --- SESSÃO ---
 if 'user' not in st.session_state: st.session_state['user'] = None
 
 # ==============================================================================
-# TELA 1: LANDING PAGE
+# TELA LOGIN
 # ==============================================================================
-def tela_landing_page():
-    c1, c2 = st.columns([1.3, 1])
-    with c1:
-        st.image(LOGO_URL, width=220)
-        st.markdown("""
-        # O Sistema Definitivo para Milheiros Profissionais 🚀
-        Domine o mercado de milhas com inteligência de dados. O **MilhasPro** automatiza cotações, monitora o mercado P2P e gerencia seu patrimônio em tempo real.
-        """)
+def tela_login():
+    c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
-        st.markdown("<div style='background: white; padding: 25px; border-radius: 12px; box-shadow: 0 10px 30px rgba(14, 67, 107, 0.1); border: 1px solid #E2E8F0;'>", unsafe_allow_html=True)
-        st.markdown("<h3 style='text-align: center; color: #0E436B; margin-top: 0;'>Acessar Painel</h3>", unsafe_allow_html=True)
-        tab_l, tab_c = st.tabs(["ENTRAR", "CRIAR CONTA"])
-        with tab_l:
-            with st.form("login_form"):
-                email = st.text_input("E-mail")
-                senha = st.text_input("Senha", type="password")
-                if st.form_submit_button("ENTRAR AGORA"):
-                    try:
-                        if email == st.secrets["admin"]["email"] and senha == st.secrets["admin"]["senha"]:
-                            st.session_state['user'] = {"nome": st.secrets["admin"]["nome"], "plano": "Admin", "email": email}
-                            st.rerun()
-                    except: pass
-                    user = autenticar_usuario(email, senha)
-                    if user:
-                        st.session_state['user'] = user
-                        st.toast(f"Bem-vindo, {user['nome']}!")
-                        time.sleep(0.5); st.rerun()
-                    else: st.error("Dados inválidos.")
-        with tab_c:
-            with st.form("cad_form"):
-                nome = st.text_input("Nome")
-                c_email = st.text_input("E-mail")
-                whats = st.text_input("WhatsApp")
-                pw = st.text_input("Senha (Min 8 chars)")
-                if st.form_submit_button("CADASTRAR GRÁTIS"):
-                    ok, msg = registrar_usuario(nome, c_email, pw, whats)
-                    if ok: st.success("Sucesso! Faça login."); st.balloons()
-                    else: st.error(msg)
-        st.markdown("</div>", unsafe_allow_html=True)
-    st.markdown("---")
-    col_f1, col_f2, col_f3 = st.columns(3)
-    with col_f1: st.markdown("""<div class="lp-card"><span class="lp-icon">🤖</span><div class="lp-title">Automação Inteligente</div><div class="lp-text">Nosso robô monitora a Hotmilhas todo dia e salva o histórico.</div></div>""", unsafe_allow_html=True)
-    with col_f2: st.markdown("""<div class="lp-card"><span class="lp-icon">👥</span><div class="lp-title">Radar P2P Exclusivo</div><div class="lp-text">Saiba quanto estão pagando nos grupos fechados.</div></div>""", unsafe_allow_html=True)
-    with col_f3: st.markdown("""<div class="lp-card"><span class="lp-icon">💼</span><div class="lp-title">Controle de Patrimônio</div><div class="lp-text">Registre suas compras e veja seu lucro baseado na melhor cotação.</div></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div style="display: flex; flex-direction: column; align-items: center; margin-bottom: 20px;"><img src="{LOGO_URL}" style="width: 300px; max-width: 100%;"><h3 style='text-align: center; color: #0E436B; margin-top: -30px; margin-bottom: 0;'>Acesso ao Sistema</h3></div>""", unsafe_allow_html=True)
+        tab1, tab2 = st.tabs(["ENTRAR", "CRIAR CONTA"])
+        with tab1:
+            email = st.text_input("E-mail", key="log_e")
+            senha = st.text_input("Senha", type="password", key="log_p")
+            if st.button("ENTRAR", type="primary", key="btn_l"):
+                try:
+                    if email == st.secrets["admin"]["email"] and senha == st.secrets["admin"]["senha"]:
+                        st.session_state['user'] = {"nome": st.secrets["admin"]["nome"], "plano": "Admin", "email": email}; st.rerun()
+                except: pass
+                u = autenticar_usuario(email, senha)
+                if u: st.session_state['user'] = u; st.rerun()
+                else: st.error("Erro no login.")
+        with tab2:
+            n = st.text_input("Nome", key="c_n"); e = st.text_input("Email", key="c_e"); w = st.text_input("Zap", key="c_w"); p = st.text_input("Senha", type="password", key="c_p")
+            if st.button("CADASTRAR", key="btn_c"):
+                ok, msg = registrar_usuario(n, e, p, w)
+                if ok: st.success("Criado!"); st.balloons()
+                else: st.error(msg)
     
+    # Landing Page Elements
     st.markdown("---")
     c_p1, c_p2, c_p3 = st.columns([1, 2, 1])
     with c_p2:
@@ -347,21 +275,18 @@ def tela_landing_page():
             <h1 style="font-size: 3.5rem; margin: 0; color: #222;">R$ 49,90<span style="font-size: 1rem; color: #888;">/mês</span></h1>
             <hr style="margin: 20px 0;">
             <div style="text-align: left; color: #555;">
-                <p>✅ Acesso Ilimitado ao Dashboard</p><p>✅ Cotações P2P Exclusivas</p><p>✅ Gestão de Carteira Inteligente</p>
+                <p>✅ Cotações P2P em Tempo Real</p><p>✅ Gestão de Carteira</p><p>✅ Calculadora de Emissão</p>
             </div>
-            <br>
-        </div>
-        """, unsafe_allow_html=True)
-        st.info("👆 Crie sua conta grátis acima para assinar.")
+        </div>""", unsafe_allow_html=True)
 
 # ==============================================================================
-# TELA 2: SISTEMA LOGADO
+# SISTEMA LOGADO
 # ==============================================================================
 def sistema_logado():
     user = st.session_state['user']
     plano = user['plano']
     
-    opcoes = ["Dashboard (Mercado)", "✈️ Robô de Passagens (Beta)", "Minha Carteira", "Mercado P2P", "Promoções"]
+    opcoes = ["Mercado P2P (Cotações)", "Produção & Cálculo", "Minha Carteira", "Promoções"]
     if plano == "Admin": opcoes.append("👑 Gestão de Usuários")
 
     with st.sidebar:
@@ -370,155 +295,184 @@ def sistema_logado():
         if plano == "Admin": st.success("👑 ADMIN")
         elif plano == "Pro": st.success("⭐ PRO")
         else: st.info("🔹 FREE")
+        st.divider(); menu = st.radio("Menu", opcoes); st.divider()
+        if st.button("SAIR"): st.session_state['user'] = None; st.rerun()
+
+    # --- 1. VISÃO DE MERCADO (BASEADA 100% NO P2P) ---
+    if menu == "Mercado P2P (Cotações)":
+        st.header("📊 Cotações de Balcão (P2P)")
+        st.caption("Preços praticados nos principais grupos de Telegram (Venda Particular).")
+        
+        # Área do Admin postar
+        if plano == "Admin":
+            with st.expander("👑 Publicar Nova Cotação"):
+                with st.form("p2p_add"):
+                    c1, c2 = st.columns(2)
+                    g = c1.text_input("Fonte (Ex: Balcão Milhas)")
+                    p = c2.selectbox("Programa", ["Latam", "Smiles", "Azul", "Livelo", "Esfera", "TAP", "Iberia"])
+                    v = st.number_input("Valor do Milheiro (R$)", 10.0, 100.0, step=0.1)
+                    o = st.text_input("Obs (Ex: Pagamento PIX)")
+                    if st.form_submit_button("Publicar"):
+                        if adicionar_p2p(g, p, v, o): st.success("Publicado!"); time.sleep(0.5); st.rerun()
+                        else: st.error("Erro")
+
+        # Dashboard de Preços
+        st.markdown("### 📈 Cotações Atuais")
+        cols = st.columns(3)
+        programas = ["Latam", "Smiles", "Azul"]
+        
+        for i, p in enumerate(programas):
+            preco_atual = pegar_preco_p2p_atual(p)
+            
+            # Gráfico
+            df_hist = ler_historico_p2p(p)
+            
+            with cols[i]:
+                st.markdown(criar_card_destaque(f"{p}", formatar_real(preco_atual), "Última oferta P2P", "blue"), unsafe_allow_html=True)
+                if not df_hist.empty:
+                    # Gráfico de linha com o histórico P2P
+                    fig = px.line(df_hist, x="data_hora", y="valor", markers=True)
+                    fig.update_layout(height=200, margin=dict(l=0,r=0,t=0,b=0), xaxis_title=None, yaxis_title=None)
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("Sem histórico recente.")
+
         st.divider()
-        menu = st.radio("Menu", opcoes)
+        st.markdown("### 📋 Feed de Ofertas")
+        dfp = ler_p2p_todos()
+        if not dfp.empty:
+            dfp['valor'] = dfp['valor'].apply(formatar_real)
+            st.dataframe(dfp[['data_hora', 'programa', 'valor', 'grupo_nome', 'observacao']], use_container_width=True)
+        elif plano == "Free": mostrar_paywall()
+
+    # --- 2. CALCULADORA (CUSTO x P2P) ---
+    elif menu == "Produção & Cálculo":
+        st.header("🏭 Fábrica de Milhas")
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("1. Custo de Produção")
+            prog_origem = st.selectbox("Origem", ["Livelo", "Esfera"])
+            desc = st.slider("Desconto Compra (%)", 0, 60, 50)
+            custo_base = 70.0 * (1 - desc/100)
+            st.metric(f"Custo {prog_origem}", formatar_real(custo_base))
+            
+        with c2:
+            st.subheader("2. Transferência")
+            prog_dest = st.selectbox("Destino", ["Latam", "Smiles", "Azul"])
+            bonus = st.number_input("Bônus (%)", 0, 120, 100, step=10)
+            cpm_final = custo_base / (1 + bonus/100)
+            st.markdown(criar_card_destaque("CPM FINAL (SEU CUSTO)", formatar_real(cpm_final), f"{prog_dest} com {bonus}% bônus", "green"), unsafe_allow_html=True)
+
         st.divider()
-        if st.button("SAIR DO SISTEMA"): st.session_state['user'] = None; st.rerun()
-
-    df_cotacoes = ler_dados_historico()
-
-    if menu == "Dashboard (Mercado)":
-        st.header("📊 Visão de Mercado")
-        if not df_cotacoes.empty:
-            cols = st.columns(3)
-            for i, p in enumerate(["Latam", "Smiles", "Azul"]):
-                d = df_cotacoes[df_cotacoes['programa'].str.contains(p, case=False, na=False)]
-                val_hot = d.iloc[-1]['cpm'] if not d.empty else 0.0
-                val_p2p = pegar_ultimo_p2p(p)
-                hot_wins = val_hot > val_p2p and val_hot > 0
-                p2p_wins = val_p2p > val_hot and val_p2p > 0
-                with cols[i]:
-                    st.markdown(f"### {p}")
-                    mc1, mc2 = st.columns(2)
-                    with mc1: st.markdown(criar_card_preco("🤖 Hotmilhas", val_hot, hot_wins), unsafe_allow_html=True)
-                    with mc2: st.markdown(criar_card_preco("👥 P2P", val_p2p, p2p_wins), unsafe_allow_html=True)
-                    st.divider()
-                    if not d.empty: st.plotly_chart(plotar_grafico(d, p), use_container_width=True)
-        else: st.warning("Aguardando robô.")
-
-    # --- ROBÔ DE PASSAGENS ---
-    elif menu == "✈️ Robô de Passagens (Beta)":
-        st.header("✈️ Calculadora Inteligente de Emissão")
-        st.info("Descubra se vale a pena emitir com milhas ou pagar em dinheiro.")
-        if plano == "Free": mostrar_paywall()
+        
+        st.subheader("3. Lucro vs P2P")
+        val_p2p = pegar_preco_p2p_atual(prog_dest)
+        
+        if val_p2p > 0:
+            lucro = val_p2p - cpm_final
+            margem = (lucro/cpm_final)*100
+            cor = "green" if lucro > 0 else "red"
+            
+            col_res1, col_res2 = st.columns(2)
+            with col_res1:
+                st.markdown(criar_card_destaque("PREÇO VENDA (P2P)", formatar_real(val_p2p), "Baseado no mercado atual", "blue"), unsafe_allow_html=True)
+            with col_res2:
+                st.markdown(criar_card_destaque("LUCRO ESTIMADO", formatar_real(lucro), f"Margem: {margem:.1f}%", cor), unsafe_allow_html=True)
         else:
-            with st.form("robo_form"):
-                c1, c2 = st.columns(2)
-                prog_destino = c1.selectbox("Programa de Fidelidade", ["Smiles", "Latam Pass", "TudoAzul"])
-                milhas = c2.number_input("Valor em Milhas (Total)", min_value=1000, step=1000, value=50000)
-                valor_dinheiro = st.number_input("Preço da Passagem em Dinheiro (R$)", min_value=100.0, step=50.0, value=2500.0)
-                
-                if st.form_submit_button("🤖 CALCULAR DECISÃO"):
-                    with st.spinner("Analisando custo de oportunidade..."):
-                        time.sleep(1)
-                        resultado = calcular_decisao_emissao(prog_destino, milhas, valor_dinheiro, df_cotacoes)
-                        if resultado['decisao'] == "MILHAS":
-                            st.markdown(f"""<div class="robo-box-green"><h2 style="margin:0;">✅ EMITA COM MILHAS!</h2><p style="font-size: 1.2rem;">Economia estimada: <b>{formatar_real(resultado['economia'])}</b></p><hr style="border-color: rgba(255,255,255,0.3);"><p>{resultado['msg']}</p></div>""", unsafe_allow_html=True)
-                            st.balloons()
-                        else:
-                            st.markdown(f"""<div class="robo-box-red"><h2 style="margin:0;">🛑 PAGUE EM DINHEIRO!</h2><p style="font-size: 1.2rem;">Usar milhas agora seria um prejuízo de <b>{formatar_real(resultado['economia'])}</b></p><hr style="border-color: rgba(255,255,255,0.3);"><p>{resultado['msg']}</p></div>""", unsafe_allow_html=True)
+            st.warning("Não há cotação P2P cadastrada para este programa hoje.")
 
+    # --- 3. CARTEIRA (VALUATION P2P) ---
     elif menu == "Minha Carteira":
         st.header("💼 Carteira")
         if plano == "Free": mostrar_paywall()
         else:
             with st.expander("➕ Adicionar Lote", expanded=True):
-                with st.form("add_carteira"):
+                with st.form("add"):
                     c1, c2, c3 = st.columns(3)
-                    p = c1.selectbox("Programa", ["Latam Pass", "Smiles", "Azul", "Livelo"])
+                    p = c1.selectbox("Prog", ["Latam", "Smiles", "Azul", "Livelo", "Esfera"])
                     q = c2.number_input("Qtd", 1000, step=1000)
-                    cpm = c3.number_input("CPM Pago (R$)", 0.0, 100.0, 35.0)
-                    if st.form_submit_button("💾 Salvar Lote"):
+                    cpm = c3.number_input("CPM Pago (R$)", 0.0, 70.0, 35.0)
+                    if st.form_submit_button("Salvar"):
                         total = (q/1000)*cpm
-                        ok, msg = adicionar_carteira(user['email'], p, q, total)
-                        if ok: st.success("Salvo!"); time.sleep(0.5); st.rerun()
-                        else: st.error(f"Erro: {msg}")
+                        if adicionar_carteira(user['email'], p, q, total): st.success("OK!"); time.sleep(0.5); st.rerun()
+            
             dfc = ler_carteira_usuario(user['email'])
             if not dfc.empty:
                 patrimonio = 0; custo_total = 0; view_data = []
                 for _, row in dfc.iterrows():
-                    prog_nome = row['programa'].split()[0]
-                    val_hot = 0.0
-                    if not df_cotacoes.empty:
-                        f = df_cotacoes[df_cotacoes['programa'].str.contains(prog_nome, case=False, na=False)]
-                        if not f.empty: val_hot = f.iloc[-1]['cpm']
-                    val_p2p = pegar_ultimo_p2p(prog_nome)
-                    melhor_preco = max(val_hot, val_p2p)
-                    if melhor_preco == 0: origem = "Sem Cotação"
-                    else: origem = "Hotmilhas" if val_hot >= val_p2p else "P2P"
-                    qtd = float(row['quantidade']); custo = float(row['custo_total']); cpm_pago = float(row['cpm_medio'])
-                    val_venda = (qtd / 1000) * melhor_preco
+                    prog = row['programa']
+                    # Valuation baseada no P2P ou Custo (se for Livelo/Esfera)
+                    if prog in ["Livelo", "Esfera"]:
+                        # Pontos de banco valem o custo ou preço de venda P2P deles
+                        val_mercado = pegar_preco_p2p_atual(prog)
+                        if val_mercado == 0: val_mercado = 35.0 # Fallback conservador
+                    else:
+                        val_mercado = pegar_preco_p2p_atual(prog)
+                    
+                    qtd = float(row['quantidade'])
+                    custo = float(row['custo_total'])
+                    
+                    val_venda = (qtd/1000) * val_mercado
                     lucro = val_venda - custo
-                    patrimonio += val_venda; custo_total += custo
-                    view_data.append({"ID": row['id'], "Programa": row['programa'], "Qtd": f"{qtd:,.0f}".replace(',', '.'), "Custo": formatar_real(custo), "CPM Pago": formatar_real(cpm_pago), "Melhor Cotação": f"{formatar_real(melhor_preco)} ({origem})", "Lucro (Hoje)": formatar_real(lucro), "val_lucro_raw": lucro})
+                    patrimonio += val_venda
+                    custo_total += custo
+                    
+                    view_data.append({
+                        "ID": row['id'], "Prog": prog, "Qtd": f"{qtd:,.0f}".replace(',','.'),
+                        "Custo": formatar_real(custo),
+                        "Cotação P2P": formatar_real(val_mercado),
+                        "Lucro Est.": formatar_real(lucro),
+                        "val_raw": lucro
+                    })
+                
                 k1, k2, k3 = st.columns(3)
                 k1.metric("Total Investido", formatar_real(custo_total))
-                k2.metric("Patrimônio Atual", formatar_real(patrimonio))
-                delta_perc = ((patrimonio/custo_total)-1)*100 if custo_total > 0 else 0
-                k3.metric("Lucro Projetado", formatar_real(patrimonio - custo_total), delta=f"{delta_perc:.1f}%")
+                k2.metric("Patrimônio (P2P)", formatar_real(patrimonio))
+                k3.metric("Resultado", formatar_real(patrimonio - custo_total))
                 st.divider()
+                
                 def color_lucro(val):
-                    if isinstance(val, str) and "-" in val: return 'color: #d9534f; font-weight: bold;' # Vermelho
-                    return 'color: #28a745; font-weight: bold;' # Verde
-                st.dataframe(pd.DataFrame(view_data).drop(columns=['val_lucro_raw']).style.applymap(color_lucro, subset=['Lucro (Hoje)']), use_container_width=True)
-                rid = st.number_input("ID para remover", step=1)
-                if st.button("🗑️ Remover Lote"): remover_carteira(rid); st.rerun()
+                    if isinstance(val, str) and "-" in val: return 'color: #d9534f; font-weight: bold;'
+                    return 'color: #28a745; font-weight: bold;'
+                
+                st.dataframe(pd.DataFrame(view_data).drop(columns=['val_raw']).style.applymap(color_lucro, subset=['Lucro Est.']), use_container_width=True)
+                
+                rid = st.number_input("ID Excluir", step=1)
+                if st.button("Remover"): remover_carteira(rid); st.rerun()
             else: st.info("Carteira vazia.")
 
-    elif menu == "Mercado P2P":
-        st.header("📢 Radar P2P")
-        if plano == "Admin":
-            with st.form("p2p"):
-                st.markdown("### 👑 Inserir Oferta (Admin)")
-                c1, c2 = st.columns(2)
-                g = c1.text_input("Grupo")
-                p = c2.selectbox("Prog", ["Latam", "Smiles", "Azul"])
-                val = st.number_input("Valor", 15.0)
-                obs = st.text_input("Obs")
-                if st.form_submit_button("PUBLICAR"):
-                    ok, msg = adicionar_p2p(g, p, "COMPRA", val, obs)
-                    if ok: st.success("Salvo!"); time.sleep(0.5); st.rerun()
-                    else: st.error(f"Erro: {msg}")
-        else:
-            if plano == "Free": mostrar_paywall(); st.stop()
-            else: st.info("ℹ️ Dados verificados pela administração.")
-        dfp = ler_p2p_todos()
-        if not dfp.empty:
-            dfp['valor'] = dfp['valor'].apply(formatar_real)
-            st.dataframe(dfp, use_container_width=True)
-
+    # --- 4. PROMOÇÕES ---
     elif menu == "Promoções":
-        st.header("🔥 Radar")
+        st.header("🔥 Radar de Promoções")
         if plano == "Free": mostrar_paywall()
         else:
-            with st.spinner("Buscando ao vivo..."):
+            with st.spinner("Buscando promoções..."):
                 df_news = buscar_promocoes_live()
                 if not df_news.empty:
                     for _, row in df_news.iterrows():
-                        with st.container():
-                            st.markdown(f"##### 🔗 [{row['Título']}]({row['Link']})")
-                            st.caption(f"📅 {row['Data']} | 📰 {row['Fonte']}")
-                            st.divider()
-                else: st.info("Nenhuma promoção encontrada.")
+                        st.markdown(f"##### 🔗 [{row['Título']}]({row['Link']})")
+                        st.caption(f"📅 {row['Data']} | 📰 {row['Fonte']}")
+                        st.divider()
+                else: st.info("Nada encontrado.")
 
+    # --- ADMIN ---
     elif menu == "👑 Gestão de Usuários":
         st.header("Admin CRM")
-        df_users = admin_listar_todos()
-        if not df_users.empty:
-            sel = st.selectbox("Editar", df_users['email'].tolist())
-            u_dados = df_users[df_users['email'] == sel].iloc[0]
+        df = admin_listar_todos()
+        if not df.empty:
+            sel = st.selectbox("Editar", df['email'].tolist())
+            u = df[df['email'] == sel].iloc[0]
             st.divider()
             c1, c2 = st.columns(2)
             with c1:
-                with st.form("edit"):
-                    n = st.text_input("Nome", u_dados['nome'])
-                    p = st.selectbox("Plano", ["Free", "Pro", "Admin"], index=["Free", "Pro", "Admin"].index(u_dados.get('plano', 'Free')))
-                    s = st.selectbox("Status", ["Ativo", "Bloqueado"], index=0)
-                    if st.form_submit_button("SALVAR"):
-                        if admin_atualizar_dados(int(u_dados['id']), n, u_dados['email'], u_dados['telefone'], p, s):
-                            st.success("OK"); time.sleep(1); st.rerun()
-            st.dataframe(df_users)
+                with st.form("edt"):
+                    n = st.text_input("Nome", u['nome'])
+                    p = st.selectbox("Plano", ["Free", "Pro", "Admin"], index=["Free","Pro","Admin"].index(u.get('plano','Free')))
+                    s = st.selectbox("Status", ["Ativo", "Bloqueado"])
+                    if st.form_submit_button("Salvar"): 
+                        if admin_atualizar_dados(int(u['id']), n, u['email'], u['telefone'], p, s): st.success("OK"); time.sleep(1); st.rerun()
+            st.dataframe(df)
 
-# MAIN ROUTER
 if st.session_state['user']: sistema_logado()
 else: tela_landing_page()
